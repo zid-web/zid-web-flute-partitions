@@ -1,0 +1,72 @@
+# Robot de curation : cherche de nouveaux morceaux pour flûte sur IMSLP, les classe par niveau
+# et ouvre une pull request à valider. Rien n'est publié sans fusion de cette pull request.
+#
+# Prérequis (une fois) :
+#   - Settings → Secrets and variables → Actions : IMSLP_USERNAME, IMSLP_PASSWORD
+#   - Settings → Actions → General : cocher « Allow GitHub Actions to create and approve pull requests »
+name: Curation IMSLP
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Nouvelles œuvres examinées par catégorie IMSLP"
+        default: "60"
+      per_level:
+        description: "Morceaux ajoutés au maximum par niveau (1 à 5)"
+        default: "3"
+      max_level:
+        description: "Niveau maximal proposé (1 à 5)"
+        default: "5"
+  schedule:
+    - cron: "17 4 1 * *" # le 1er de chaque mois
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: curation-imslp
+  cancel-in-progress: false
+
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CURATOR: .claude/skills/imslp-flute-curator/scripts/curate.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Découverte des œuvres
+        run: python3 "$CURATOR" discover --limit "${{ inputs.limit || '60' }}"
+      - name: Téléchargement des partitions numériques
+        env:
+          IMSLP_USERNAME: ${{ secrets.IMSLP_USERNAME }}
+          IMSLP_PASSWORD: ${{ secrets.IMSLP_PASSWORD }}
+        run: python3 "$CURATOR" fetch
+      - name: Analyse (partie de flûte, difficulté, niveau)
+        run: python3 "$CURATOR" analyse
+      - name: Sélection
+        run: >
+          python3 "$CURATOR" publish
+          --per-level "${{ inputs.per_level || '3' }}"
+          --max-level "${{ inputs.max_level || '5' }}"
+      - name: Tests du skill
+        run: python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests
+      - name: Pull request à valider
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: curation/imslp
+          delete-branch: true
+          add-paths: |
+            public/scores/**
+            content/imslp-seen.json
+          commit-message: "Catalogue : nouveaux morceaux IMSLP"
+          title: "Catalogue : nouveaux morceaux IMSLP"
+          body-path: skill-work/summary.md
+          labels: catalogue
+      - name: Résumé
+        if: always()
+        run: cat skill-work/summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true

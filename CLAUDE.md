@@ -10,3 +10,6 @@ Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français 
 - Jamais d'identifiants IMSLP dans le dépôt : variables d'environnement `IMSLP_USERNAME` / `IMSLP_PASSWORD`.
 - Ne garder que des partitions domaine public / CC (pas de NonCommercial sans accord explicite).
 - Hors ligne obligatoire : pas d'appel réseau au runtime, pas de police ni de script externes.
+- Difficulté : `difficulty.py` (skill) et `src/lib/difficulty.ts` (import dans l'app) doivent rester identiques ; le test d'import le vérifie sur `catalog.json`.
+- Partitions importées : uniquement sur l'appareil (`src/lib/userScores.ts`, IndexedDB), jamais envoyées sur un serveur.
+- Pas de connexion directe de l'application à IMSLP : le catalogue passe par le workflow « Curation IMSLP » et une pull request validée.

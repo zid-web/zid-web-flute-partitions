@@ -53,6 +53,15 @@ python3 .claude/skills/imslp-flute-curator/scripts/curate.py catalog
 
 Les MIDI sont convertis en MusicXML si MuseScore (`mscore`) est installé ; sinon ils sont ignorés.
 
+`discover` ignore les œuvres listées dans `content/imslp-seen.json` (versionné) et y ajoute celles qu'il
+examine : chaque passage avance dans les catégories IMSLP. `publish` ignore les morceaux déjà publiés et
+écrit `skill-work/summary.md` (tableau des nouveautés, utilisé comme corps de pull request).
+
+### Automatisation GitHub Actions
+
+`.github/workflows/curate.yml` (« Curation IMSLP », manuel ou mensuel) enchaîne discover → fetch → analyse →
+publish et ouvre une pull request `curation/imslp` à valider. Secrets : `IMSLP_USERNAME`, `IMSLP_PASSWORD`.
+
 ## Comment la difficulté est calculée (`scripts/difficulty.py`)
 
 Indicateurs extraits de la partie de flûte, normalisés entre 0 et 1, puis pondérés :
@@ -71,6 +80,11 @@ Indicateurs extraits de la partie de flûte, normalisés entre 0 et 1, puis pond
 | N-olets et ornements | 5 | 0 → 15 % des notes |
 
 Score de complexité = moyenne pondérée × 100. Niveau : **1** < 15 ≤ **2** < 30 ≤ **3** < 48 ≤ **4** < 68 ≤ **5**.
+
+**Le même calcul existe en TypeScript** (`src/lib/difficulty.ts`) pour classer les partitions importées
+dans l'application. Toute modification des poids ou des seuils doit être faite **dans les deux fichiers** :
+le test `src/lib/__tests__/import.test.ts` vérifie que le TypeScript retrouve la complexité et le niveau de
+chaque morceau de `catalog.json` (calculés par Python).
 
 Ces seuils sont un point de départ : si un professeur juge un morceau mal classé, ajuster les
 poids dans `complexity_score` / les seuils dans `level_for`, puis relancer `catalog` et les tests.

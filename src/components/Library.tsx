@@ -1,26 +1,32 @@
 import { useMemo, useState } from "react";
 import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
 import type { PieceProgress } from "../lib/progress";
+import { ImportButton } from "./ImportButton";
 
 interface Props {
   catalog: CatalogEntry[];
   progress: Record<string, PieceProgress>;
   onOpen: (entry: CatalogEntry) => void;
+  onImported: (entry: CatalogEntry) => void;
+  onDelete: (entry: CatalogEntry) => void;
 }
 
 const LEVELS = [1, 2, 3, 4, 5] as const;
 
-export function Library({ catalog, progress, onOpen }: Props) {
+export function Library({ catalog, progress, onOpen, onImported, onDelete }: Props) {
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
+  const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState("");
+  const mineCount = catalog.filter((e) => e.origin === "import").length;
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog
+      .filter((e) => !mineOnly || e.origin === "import")
       .filter((e) => level === 0 || e.level === level)
       .filter((e) => !q || `${e.title} ${e.composer}`.toLowerCase().includes(q))
       .sort((a, b) => a.level - b.level || a.complexity - b.complexity);
-  }, [catalog, level, query]);
+  }, [catalog, level, mineOnly, query]);
 
   const totalStars = Object.values(progress).reduce((s, p) => s + p.stars, 0);
 
@@ -45,6 +51,11 @@ export function Library({ catalog, progress, onOpen }: Props) {
             {"●".repeat(l)} {LEVEL_LABELS[l]}
           </button>
         ))}
+        {mineCount > 0 && (
+          <button className={mineOnly ? "chip active" : "chip"} onClick={() => setMineOnly((m) => !m)}>
+            📥 Mes partitions ({mineCount})
+          </button>
+        )}
         <input
           className="search"
           type="search"
@@ -54,14 +65,23 @@ export function Library({ catalog, progress, onOpen }: Props) {
         />
       </div>
 
+      <ImportButton
+        onImported={(entry) => {
+          setMineOnly(false);
+          setLevel(0);
+          onImported(entry);
+        }}
+      />
+
       <ul className="cards">
         {shown.map((e) => {
           const stars = progress[e.id]?.stars ?? 0;
           return (
-            <li key={e.id}>
+            <li key={e.id} className="card-slot">
               <button className={`card lvl${e.level}`} onClick={() => onOpen(e)}>
                 <span className="level-badge">
                   Niveau {e.level} · {LEVEL_LABELS[e.level]}
+                  {e.origin === "import" && <span className="mine-badge">importée</span>}
                 </span>
                 <strong className="title">{e.title}</strong>
                 <span className="composer">{e.composer}</span>
@@ -79,13 +99,26 @@ export function Library({ catalog, progress, onOpen }: Props) {
                 </span>
                 <span className="stars">{[1, 2, 3].map((i) => (i <= stars ? "★" : "☆")).join("")}</span>
               </button>
+              {e.origin === "import" && (
+                <button
+                  className="delete"
+                  aria-label={`Supprimer ${e.title}`}
+                  title="Supprimer de cet appareil"
+                  onClick={() => {
+                    if (window.confirm(`Supprimer « ${e.title} » de cet appareil ?`)) onDelete(e);
+                  }}
+                >
+                  ✕
+                </button>
+              )}
             </li>
           );
         })}
         {shown.length === 0 && <li className="message">Aucun morceau pour ce filtre.</li>}
       </ul>
       <footer className="credits">
-        Partitions du domaine public (IMSLP et répertoire traditionnel). Fonctionne hors ligne.
+        Partitions du domaine public (IMSLP et répertoire traditionnel). Fonctionne hors ligne. Les partitions
+        importées restent sur cet appareil.
       </footer>
     </main>
   );

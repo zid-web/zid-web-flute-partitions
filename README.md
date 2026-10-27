@@ -26,17 +26,31 @@ Le micro exige HTTPS (ou `localhost`). Sans flûte, le bouton « Note suivante �
 
 ## Ajouter des partitions
 
-Voir [le skill de curation](.claude/skills/imslp-flute-curator/SKILL.md). En bref :
+Deux chemins, sans jamais relier l'application en direct à IMSLP (hors ligne, droits d'auteur, identifiants) :
 
-```bash
-python3 .claude/skills/imslp-flute-curator/scripts/curate.py discover --limit 300
-IMSLP_USERNAME=… IMSLP_PASSWORD=… python3 .claude/skills/imslp-flute-curator/scripts/curate.py fetch
-python3 .claude/skills/imslp-flute-curator/scripts/curate.py analyse
-python3 .claude/skills/imslp-flute-curator/scripts/curate.py publish --per-level 4
-```
+### 1. Catalogue commun : robot « Curation IMSLP » (GitHub Actions)
 
-Les identifiants IMSLP ne se mettent **que** dans des variables d'environnement (jamais dans le dépôt).
-Mélodies traditionnelles / exercices : `content/originals/*.json` → `python3 scripts/make_samples.py content/originals/*.json`.
+Onglet **Actions → Curation IMSLP → Run workflow** (ou automatiquement le 1er de chaque mois).
+Le robot cherche de nouvelles œuvres pour flûte sur IMSLP, ne garde que les licences libres et les fichiers
+MusicXML, extrait la partie de flûte, calcule niveau et complexité, puis **ouvre une pull request** avec le
+tableau des morceaux proposés. Rien n'est publié tant que la pull request n'est pas fusionnée ; à la fusion,
+Vercel met le site à jour. `content/imslp-seen.json` mémorise les œuvres déjà examinées : chaque passage avance.
+
+Prérequis (une fois) :
+- *Settings → Secrets and variables → Actions* : secrets `IMSLP_USERNAME` et `IMSLP_PASSWORD`.
+- *Settings → Actions → General* : cocher **« Allow GitHub Actions to create and approve pull requests »**.
+- Les pull requests ouvertes par le robot ne déclenchent pas la CI d'elles-mêmes (règle GitHub) : l'aperçu
+  Vercel suffit pour écouter les morceaux ; sinon fermer/rouvrir la pull request relance la CI.
+
+En local, même pipeline : voir [le skill de curation](.claude/skills/imslp-flute-curator/SKILL.md).
+
+### 2. Partitions personnelles : bouton « 📥 Importer une partition » (dans l'application)
+
+L'élève ou le professeur télécharge un fichier **MusicXML** (`.mxl`, `.musicxml`) sur IMSLP ou ailleurs, puis
+l'importe (ou le glisse) dans la bibliothèque. L'application garde la partie de flûte, calcule le niveau avec
+les mêmes règles que le skill, et enregistre la partition **sur l'appareil uniquement** (IndexedDB, hors ligne).
+
+Mélodies traditionnelles / exercices du catalogue : `content/originals/*.json` → `python3 scripts/make_samples.py content/originals/*.json`.
 
 ## Déployer le web sur Vercel
 
@@ -77,6 +91,8 @@ src/lib/follower.ts   suivi de partition (logique pure, testée) : quand valider
 src/lib/pitch.ts      micro → hauteur (pitchy)
 src/lib/score.ts      OSMD : rendu, curseur, coloration des notes
 src/lib/fingering.ts  doigtés Boehm des deux premières octaves
+src/lib/difficulty.ts niveau / complexité dans le navigateur (portage du skill, testé contre catalog.json)
+src/lib/import.ts     import .mxl/.musicxml ; src/lib/userScores.ts : stockage local (IndexedDB)
 src/components/       Bibliothèque, Lecteur, Doigté
 public/scores/        partitions MusicXML + catalog.json (généré)
 .claude/skills/imslp-flute-curator/  skill de curation IMSLP (Python, sans dépendance)

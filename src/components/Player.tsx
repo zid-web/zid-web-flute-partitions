@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
+import { LEVEL_LABELS, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
 import { MicPitchSource } from "../lib/pitch";
@@ -52,11 +52,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     scoreRef.current = controller;
     let cancelled = false;
     setLoading(true);
-    fetch(`${import.meta.env.BASE_URL}scores/${entry.file}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Partition introuvable (${r.status})`);
-        return r.text();
-      })
+    loadScoreXml(entry)
       .then((xml) => controller.load(xml))
       .then(() => {
         if (cancelled) return;
@@ -77,7 +73,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       timersRef.current.forEach(clearTimeout);
       controller.dispose();
     };
-  }, [entry.file]);
+  }, [entry]);
 
   useEffect(() => {
     followerRef.current?.setOptions({ ...DEFAULT_FOLLOWER_OPTIONS, octaveTolerant });
