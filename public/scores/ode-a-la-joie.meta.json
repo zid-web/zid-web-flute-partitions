@@ -1,0 +1,15 @@
+{
+  "id": "ode-a-la-joie",
+  "title": "Ode à la joie (9ᵉ symphonie)",
+  "composer": "Ludwig van Beethoven",
+  "time": "4/4",
+  "fifths": 1,
+  "tempo": 96,
+  "source": "Thème du domaine public (1824)",
+  "license": "Domaine public",
+  "origin": "original",
+  "tags": [
+    "classique"
+  ],
+  "file": "ode-a-la-joie.musicxml"
+}

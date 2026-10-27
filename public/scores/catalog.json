@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "scores": [
+    {
+      "id": "au-clair-de-la-lune",
+      "title": "Au clair de la lune",
+      "composer": "Traditionnel français",
+      "complexity": 3,
+      "level": 1,
+      "key": "Do majeur",
+      "time": "4/4",
+      "range": {
+        "low": "Ré4",
+        "high": "Si4"
+      },
+      "noteCount": 44,
+      "file": "au-clair-de-la-lune.musicxml",
+      "source": "Répertoire traditionnel",
+      "sourceUrl": null,
+      "license": "Domaine public",
+      "origin": "original",
+      "tags": [
+        "comptine"
+      ]
+    },
+    {
+      "id": "ah-vous-dirai-je-maman",
+      "title": "Ah ! vous dirai-je, maman",
+      "composer": "Traditionnel français",
+      "complexity": 6,
+      "level": 1,
+      "key": "Do majeur",
+      "time": "2/4",
+      "range": {
+        "low": "Do5",
+        "high": "La5"
+      },
+      "noteCount": 42,
+      "file": "ah-vous-dirai-je-maman.musicxml",
+      "source": "Répertoire traditionnel",
+      "sourceUrl": null,
+      "license": "Domaine public",
+      "origin": "original",
+      "tags": [
+        "comptine"
+      ]
+    },
+    {
+      "id": "gamme-de-sol",
+      "title": "Ma première gamme (Sol majeur)",
+      "composer": "Exercice",
+      "complexity": 13,
+      "level": 1,
+      "key": "Sol majeur",
+      "time": "4/4",
+      "range": {
+        "low": "Sol4",
+        "high": "Sol5"
+      },
+      "noteCount": 16,
+      "file": "gamme-de-sol.musicxml",
+      "source": "Exercice original",
+      "sourceUrl": null,
+      "license": "CC0",
+      "origin": "original",
+      "tags": [
+        "exercice",
+        "gamme"
+      ]
+    },
+    {
+      "id": "frere-jacques",
+      "title": "Frère Jacques",
+      "composer": "Traditionnel français",
+      "complexity": 14,
+      "level": 1,
+      "key": "Do majeur",
+      "time": "4/4",
+      "range": {
+        "low": "Sol4",
+        "high": "La5"
+      },
+      "noteCount": 32,
+      "file": "frere-jacques.musicxml",
+      "source": "Répertoire traditionnel",
+      "sourceUrl": null,
+      "license": "Domaine public",
+      "origin": "original",
+      "tags": [
+        "comptine",
+        "canon"
+      ]
+    },
+    {
+      "id": "ode-a-la-joie",
+      "title": "Ode à la joie (9ᵉ symphonie)",
+      "composer": "Ludwig van Beethoven",
+      "complexity": 18,
+      "level": 2,
+      "key": "Sol majeur",
+      "time": "4/4",
+      "range": {
+        "low": "Ré4",
+        "high": "Ré5"
+      },
+      "noteCount": 62,
+      "file": "ode-a-la-joie.musicxml",
+      "source": "Thème du domaine public (1824)",
+      "sourceUrl": null,
+      "license": "Domaine public",
+      "origin": "original",
+      "tags": [
+        "classique"
+      ]
+    },
+    {
+      "id": "menuet-en-sol",
+      "title": "Menuet en sol (BWV Anh. 114)",
+      "composer": "Christian Petzold (attr. J.-S. Bach)",
+      "complexity": 24,
+      "level": 2,
+      "key": "Sol majeur",
+      "time": "3/4",
+      "range": {
+        "low": "Fa♯4",
+        "high": "Sol5"
+      },
+      "noteCount": 64,
+      "file": "menuet-en-sol.musicxml",
+      "source": "Petit livre d'Anna Magdalena Bach (1725), domaine public",
+      "sourceUrl": null,
+      "license": "Domaine public",
+      "origin": "original",
+      "tags": [
+        "baroque"
+      ]
+    }
+  ]
+}
