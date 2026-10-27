@@ -1,11 +1,15 @@
 """Tests du skill : python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests"""
+import argparse
+import json
+import os
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from curate import extract_flute_part  # noqa: E402
+from curate import cmd_publish, extract_flute_part  # noqa: E402
 from difficulty import analyse  # noqa: E402
 from imslp import is_public_domain, parse_work  # noqa: E402
 
@@ -61,6 +65,32 @@ class CuratorTest(unittest.TestCase):
         self.assertEqual(easy.level, 1)
         self.assertLess(easy.complexity, harder.complexity)
         self.assertEqual((easy.low, easy.high), ("Ré4", "Si4"))
+
+    def test_publish_skips_existing_and_writes_summary(self):
+        sample = ROOT / "public/scores/au-clair-de-la-lune.musicxml"
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                Path("public/scores").mkdir(parents=True)
+                Path("skill-work").mkdir()
+                shutil.copy(sample, "public/scores/deja.musicxml")
+                Path("public/scores/deja.meta.json").write_text(json.dumps({"id": "deja", "file": "deja.musicxml"}))
+                shutil.copy(sample, "skill-work/new.musicxml")
+                row = {"title": "T", "composer": "C", "level": 1, "complexity": 3, "low": "Ré4", "high": "Si4",
+                       "license": "Public Domain", "sourceUrl": "https://imslp.org/wiki/X", "origin": "native",
+                       "needsReview": False, "problems": [], "path": "skill-work/new.musicxml"}
+                rows = [row | {"id": "deja"}, row | {"id": "nouveau"}]
+                Path("skill-work/analysed.json").write_text(json.dumps(rows))
+                args = argparse.Namespace(ids=None, min_level=1, max_level=5, per_level=0, include_review=False)
+                cmd_publish(args)
+                summary = Path("skill-work/summary.md").read_text()
+                self.assertIn("1 nouveau(x) morceau(x)", summary)
+                self.assertTrue(Path("public/scores/nouveau.meta.json").exists())
+                catalog = json.loads(Path("public/scores/catalog.json").read_text())
+                self.assertEqual(sorted(e["id"] for e in catalog["scores"]), ["deja", "nouveau"])
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":

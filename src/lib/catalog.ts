@@ -1,3 +1,5 @@
+import { getUserScoreXml } from "./userScores";
+
 /** Une entrée du catalogue généré par le skill `imslp-flute-curator`. */
 export interface CatalogEntry {
   id: string;
@@ -15,8 +17,8 @@ export interface CatalogEntry {
   source: string;
   sourceUrl?: string;
   license: string;
-  /** "native" = MusicXML d'origine, "omr" = reconnu depuis un PDF puis relu. */
-  origin: "native" | "omr" | "original";
+  /** "native" = MusicXML d'origine, "omr" = reconnu depuis un PDF puis relu, "import" = fichier de l'utilisateur. */
+  origin: "native" | "omr" | "original" | "import";
   tags?: string[];
 }
 
@@ -27,6 +29,14 @@ export const LEVEL_LABELS: Record<CatalogEntry["level"], string> = {
   4: "Confirmé",
   5: "Avancé",
 };
+
+/** Contenu MusicXML d'un morceau : fichier publié, ou partition importée sur l'appareil. */
+export async function loadScoreXml(entry: CatalogEntry): Promise<string> {
+  if (entry.origin === "import") return getUserScoreXml(entry.id);
+  const res = await fetch(`${import.meta.env.BASE_URL}scores/${entry.file}`);
+  if (!res.ok) throw new Error(`Partition introuvable (${res.status})`);
+  return res.text();
+}
 
 export async function loadCatalog(): Promise<CatalogEntry[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}scores/catalog.json`);

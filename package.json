@@ -12,6 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "jszip": "3.10.1",
     "opensheetmusicdisplay": "1.9.9",
     "pitchy": "4.1.0",
     "react": "18.3.1",
@@ -19,10 +20,12 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",
+    "@types/jsdom": "21.1.7",
     "@types/node": "22.19.1",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "@vitejs/plugin-react": "4.7.0",
+    "jsdom": "25.0.1",
     "typescript": "5.9.3",
     "vite": "6.4.5",
     "vite-plugin-pwa": "0.21.2",

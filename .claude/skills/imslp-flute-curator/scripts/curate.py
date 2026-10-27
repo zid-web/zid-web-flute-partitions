@@ -30,6 +30,8 @@ from imslp import Imslp, ImslpWork, is_public_domain  # noqa: E402
 
 WORK = Path("skill-work")
 SCORES = Path("public/scores")
+# Œuvres IMSLP déjà examinées (publiées ou écartées), versionné : chaque passage avance dans le catalogue.
+SEEN = Path("content/imslp-seen.json")
 FLUTE = re.compile(r"\b(flute|flûte|flauto|flöte|fl\.)", re.I)
 DEFAULT_CATEGORIES = ["For flute", "For flute, piano", "For 2 flutes", "For flute, continuo"]
 
@@ -42,15 +44,29 @@ def slug(text: str) -> str:
 
 
 # --- discover -----------------------------------------------------------------
+def load_seen() -> set[str]:
+    return set(json.loads(SEEN.read_text(encoding="utf-8"))) if SEEN.exists() else set()
+
+
+def save_seen(seen: set[str]) -> None:
+    SEEN.parent.mkdir(parents=True, exist_ok=True)
+    SEEN.write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
 def cmd_discover(args) -> None:
+    """Examine jusqu'à --limit œuvres jamais vues (par catégorie) et note leurs fichiers."""
     client = Imslp(delay=args.delay)
     out = WORK / "candidates.jsonl"
     out.parent.mkdir(exist_ok=True)
     done = {json.loads(l)["title"] for l in out.read_text().splitlines()} if out.exists() else set()
+    seen = load_seen()
     with out.open("a", encoding="utf-8") as fh:
         for cat in args.category or DEFAULT_CATEGORIES:
-            for title in client.category_members(cat, limit=args.limit):
-                if title in done:
+            new = 0
+            for title in client.category_members(cat, limit=10**6):
+                if new >= args.limit:
+                    break
+                if title in done or title in seen:
                     continue
                 try:
                     work = client.work(title)
@@ -61,7 +77,11 @@ def cmd_discover(args) -> None:
                 row["has_symbolic"] = any(f["name"].lower().endswith((".mxl", ".xml", ".musicxml", ".mid", ".midi")) for f in row["files"])
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                 done.add(title)
+                seen.add(title)
+                new += 1
                 print(f"{'♪' if row['has_symbolic'] else '·'} {title}")
+    if not args.no_mark_seen:
+        save_seen(seen)
 
 
 # --- fetch --------------------------------------------------------------------
@@ -192,22 +212,49 @@ def cmd_analyse(args) -> None:
 # --- publish / catalog -------------------------------------------------------
 def cmd_publish(args) -> None:
     rows = json.loads((WORK / "analysed.json").read_text(encoding="utf-8"))
+    existing = {p.name.removesuffix(".meta.json") for p in SCORES.glob("*.meta.json")}
     chosen = [r for r in rows if (not args.ids or r["id"] in args.ids)
+              and r["id"] not in existing
               and (args.min_level <= r["level"] <= args.max_level)
               and (args.include_review or not r["needsReview"])]
     per_level: dict[int, int] = {}
+    published = []
     SCORES.mkdir(parents=True, exist_ok=True)
     for r in chosen:
         if args.per_level and per_level.get(r["level"], 0) >= args.per_level:
             continue
         per_level[r["level"]] = per_level.get(r["level"], 0) + 1
+        existing.add(r["id"])
         target = SCORES / f"{r['id']}.musicxml"
         shutil.copyfile(r["path"], target)
         meta = {"id": r["id"], "title": r["title"], "composer": r["composer"], "file": target.name,
-                "source": "IMSLP", "sourceUrl": r.get("sourceUrl"), "license": r["license"], "origin": r["origin"]}
+                "source": "IMSLP", "sourceUrl": r.get("sourceUrl"), "license": r["license"], "origin": r["origin"],
+                "imslpWork": r.get("imslpWork")}
         (SCORES / f"{r['id']}.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        published.append(r)
         print(f"  → {target}")
+    write_summary(published, rows)
     cmd_catalog(args)
+
+
+def write_summary(published: list[dict], rows: list[dict]) -> None:
+    """Résumé Markdown (corps de la pull request du robot de curation)."""
+    lines = [f"**{len(published)} nouveau(x) morceau(x)** sur {len(rows)} partitions analysées.", ""]
+    if published:
+        lines += ["| Niveau | Complexité | Titre | Compositeur | Tessiture | Licence | Source |",
+                  "|---|---|---|---|---|---|---|"]
+        for r in sorted(published, key=lambda r: (r["level"], r["complexity"])):
+            src = f"[IMSLP]({r['sourceUrl']})" if r.get("sourceUrl") else "—"
+            lines.append(f"| {r['level']} | {r['complexity']} | {r['title']} | {r['composer']} | "
+                         f"{r['low']}–{r['high']} | {r['license']} | {src} |")
+    review = [r for r in rows if r["needsReview"]]
+    if review:
+        lines += ["", f"<details><summary>{len(review)} partition(s) écartée(s) ou à relire</summary>", ""]
+        lines += [f"- {r['title']} — {r['composer']} : {', '.join(r['problems']) or 'OMR à relire'}" for r in review]
+        lines += ["", "</details>"]
+    lines += ["", "**Avant de fusionner** : ouvrir l'aperçu Vercel de cette pull request, lancer « Écouter » sur chaque",
+              "nouveau morceau et vérifier la licence sur IMSLP. Fermer la pull request (ou retirer un fichier) pour refuser."]
+    (WORK / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def cmd_catalog(_args) -> None:
@@ -232,7 +279,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--delay", type=float, default=1.0, help="secondes entre deux requêtes IMSLP")
     sub = p.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("discover"); d.add_argument("--category", action="append"); d.add_argument("--limit", type=int, default=200)
+    d = sub.add_parser("discover"); d.add_argument("--category", action="append")
+    d.add_argument("--limit", type=int, default=200, help="œuvres nouvelles examinées par catégorie")
+    d.add_argument("--no-mark-seen", action="store_true", help="ne pas enregistrer les œuvres dans content/imslp-seen.json")
     f = sub.add_parser("fetch"); f.add_argument("--pdf", action="store_true"); f.add_argument("--allow-nc", action="store_true")
     o = sub.add_parser("omr"); o.add_argument("--audiveris")
     sub.add_parser("analyse")
