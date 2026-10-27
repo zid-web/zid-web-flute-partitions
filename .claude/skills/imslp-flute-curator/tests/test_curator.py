@@ -11,7 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from curate import cmd_publish, extract_flute_part  # noqa: E402
 from difficulty import analyse  # noqa: E402
-from imslp import is_public_domain, parse_work  # noqa: E402
+import curate  # noqa: E402
+from imslp import Imslp, absolute_url, is_public_domain, parse_work  # noqa: E402
 
 ROOT = Path(__file__).parents[4]
 
@@ -65,6 +66,44 @@ class CuratorTest(unittest.TestCase):
         self.assertEqual(easy.level, 1)
         self.assertLess(easy.complexity, harder.complexity)
         self.assertEqual((easy.low, easy.high), ("Ré4", "Si4"))
+
+    def test_absolute_url(self):
+        self.assertEqual(absolute_url("//imslp.org/images/4/4f/X.mxl"), "https://imslp.org/images/4/4f/X.mxl")
+        self.assertEqual(absolute_url("/images/X.mxl"), "https://imslp.org/images/X.mxl")
+        self.assertEqual(absolute_url("https://imslp.org/X"), "https://imslp.org/X")
+
+    def test_login_legacy_mediawiki(self):
+        calls = []
+
+        def fake_get(url, data=None):
+            calls.append(data)
+            if "lgtoken" not in data:
+                return json.dumps({"login": {"result": "NeedToken", "token": "abc"}}).encode()
+            return json.dumps({"login": {"result": "Success"}}).encode()
+
+        client = Imslp(delay=0)
+        client._get = fake_get
+        os.environ.update(IMSLP_USERNAME="u", IMSLP_PASSWORD="p")
+        try:
+            self.assertEqual(client.login(), "OK")
+            self.assertEqual(calls[1]["lgtoken"], "abc")
+            client._get = lambda url, data=None: b"<html>erreur</html>"
+            self.assertIn("anonyme", client.login())  # un échec n'interrompt pas la collecte
+        finally:
+            del os.environ["IMSLP_USERNAME"], os.environ["IMSLP_PASSWORD"]
+
+    def test_mark_seen_skips_failed_downloads(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                Path("skill-work").mkdir()
+                Path("skill-work/candidates.jsonl").write_text('{"title": "A"}\n{"title": "B"}\n')
+                Path("skill-work/fetch-failed.json").write_text('["B"]')
+                curate.mark_seen()
+                self.assertEqual(json.loads(Path("content/imslp-seen.json").read_text()), ["A"])
+            finally:
+                os.chdir(cwd)
 
     def test_publish_skips_existing_and_writes_summary(self):
         sample = ROOT / "public/scores/au-clair-de-la-lune.musicxml"

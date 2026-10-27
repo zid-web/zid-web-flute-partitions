@@ -73,13 +73,24 @@ class Imslp:
         params.setdefault("format", "json")
         return json.loads(self._get(f"{API}?{urllib.parse.urlencode(params)}"))
 
-    def login(self) -> bool:
+    def login(self) -> str:
+        """Connexion au compte IMSLP. Renvoie un message d'état ; un échec n'arrête jamais la collecte.
+
+        IMSLP tourne sur une ancienne version de MediaWiki (pas de `meta=tokens`) : on utilise
+        la connexion en deux temps, POST action=login → « NeedToken » → nouveau POST avec lgtoken.
+        """
         user, password = os.environ.get("IMSLP_USERNAME"), os.environ.get("IMSLP_PASSWORD")
         if not user or not password:
-            return False
-        token = self.api(action="query", meta="tokens", type="login")["query"]["tokens"]["logintoken"]
-        res = json.loads(self._get(API, {"action": "login", "lgname": user, "lgpassword": password, "lgtoken": token, "format": "json"}))
-        return res.get("login", {}).get("result") == "Success"
+            return "anonyme (IMSLP_USERNAME / IMSLP_PASSWORD absents)"
+        try:
+            data = {"action": "login", "lgname": user, "lgpassword": password, "format": "json"}
+            res = json.loads(self._get(API, data)).get("login", {})
+            if res.get("result") == "NeedToken":
+                res = json.loads(self._get(API, data | {"lgtoken": res.get("token", "")})).get("login", {})
+        except Exception as exc:  # noqa: BLE001
+            return f"échec ({exc}) — poursuite en anonyme"
+        result = res.get("result", "réponse inattendue")
+        return "OK" if result == "Success" else f"refusée ({result}) — poursuite en anonyme"
 
     def category_members(self, category: str, limit: int = 500):
         """Pages d'œuvres d'une catégorie (ex. « For flute », « For flute, piano »)."""
@@ -107,7 +118,7 @@ class Imslp:
         for page in data["query"]["pages"].values():
             info = page.get("imageinfo")
             if info:
-                return info[0]["url"]
+                return absolute_url(info[0]["url"])
         return None
 
     def download(self, file_name: str, dest: str) -> str:
@@ -120,6 +131,15 @@ class Imslp:
         with open(dest, "wb") as fh:
             fh.write(content)
         return dest
+
+
+def absolute_url(url: str) -> str:
+    """IMSLP renvoie des adresses relatives au protocole (« //imslp.org/images/… »)."""
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return "https://imslp.org" + url
+    return url
 
 
 def _field(text: str, name: str) -> str:

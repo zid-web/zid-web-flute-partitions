@@ -53,8 +53,10 @@ python3 .claude/skills/imslp-flute-curator/scripts/curate.py catalog
 
 Les MIDI sont convertis en MusicXML si MuseScore (`mscore`) est installé ; sinon ils sont ignorés.
 
-`discover` ignore les œuvres listées dans `content/imslp-seen.json` (versionné) et y ajoute celles qu'il
-examine : chaque passage avance dans les catégories IMSLP. `publish` ignore les morceaux déjà publiés et
+`discover` ignore les œuvres listées dans `content/imslp-seen.json` (versionné) ; `publish` y ajoute les
+œuvres examinées pendant le passage, **sauf celles dont un téléchargement a échoué** (réessayées ensuite) :
+chaque passage avance dans les catégories IMSLP. La connexion au compte utilise l'ancien protocole
+MediaWiki d'IMSLP (`action=login` en deux temps) ; en cas d'échec, la collecte continue en anonyme. `publish` ignore les morceaux déjà publiés et
 écrit `skill-work/summary.md` (tableau des nouveautés, utilisé comme corps de pull request).
 
 ### Automatisation GitHub Actions

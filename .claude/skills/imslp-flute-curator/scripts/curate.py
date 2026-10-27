@@ -54,7 +54,10 @@ def save_seen(seen: set[str]) -> None:
 
 
 def cmd_discover(args) -> None:
-    """Examine jusqu'à --limit œuvres jamais vues (par catégorie) et note leurs fichiers."""
+    """Examine jusqu'à --limit œuvres jamais vues (par catégorie) et note leurs fichiers.
+
+    Les œuvres ne sont marquées « vues » qu'à la fin de `publish` (voir `mark_seen`) : une œuvre dont
+    un téléchargement a échoué sera réessayée au passage suivant."""
     client = Imslp(delay=args.delay)
     out = WORK / "candidates.jsonl"
     out.parent.mkdir(exist_ok=True)
@@ -77,18 +80,16 @@ def cmd_discover(args) -> None:
                 row["has_symbolic"] = any(f["name"].lower().endswith((".mxl", ".xml", ".musicxml", ".mid", ".midi")) for f in row["files"])
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                 done.add(title)
-                seen.add(title)
                 new += 1
                 print(f"{'♪' if row['has_symbolic'] else '·'} {title}")
-    if not args.no_mark_seen:
-        save_seen(seen)
 
 
 # --- fetch --------------------------------------------------------------------
 def cmd_fetch(args) -> None:
     client = Imslp(delay=args.delay)
-    print("Connexion IMSLP :", "OK" if client.login() else "anonyme (IMSLP_USERNAME / IMSLP_PASSWORD absents)")
+    print("Connexion IMSLP :", client.login(), flush=True)
     raw = WORK / "raw"
+    failed: set[str] = set()
     raw.mkdir(parents=True, exist_ok=True)
     manifest = WORK / "fetched.jsonl"
     with manifest.open("a", encoding="utf-8") as fh:
@@ -109,12 +110,26 @@ def cmd_fetch(args) -> None:
                 try:
                     client.download(name, str(dest))
                 except Exception as exc:  # noqa: BLE001
-                    print(f"  ! {name}: {exc}", file=sys.stderr)
+                    print(f"  ! {name}: {exc}", flush=True)
+                    failed.add(work["title"])
                     continue
                 fh.write(json.dumps({"path": str(dest), "work": work["title"], "url": work["url"],
                                      "composer": work["composer"], "copyright": f.get("copyright", ""),
                                      "description": f.get("description", "")}, ensure_ascii=False) + "\n")
-                print(f"  ↓ {dest}")
+                print(f"  ↓ {dest}", flush=True)
+    (WORK / "fetch-failed.json").write_text(json.dumps(sorted(failed), ensure_ascii=False), encoding="utf-8")
+    print(f"{len(failed)} œuvre(s) en échec de téléchargement (réessayées au prochain passage)")
+
+
+def mark_seen() -> None:
+    """Ajoute à content/imslp-seen.json les œuvres examinées ce passage, sauf celles en échec."""
+    candidates = WORK / "candidates.jsonl"
+    if not candidates.exists():
+        return
+    failed_path = WORK / "fetch-failed.json"
+    failed = set(json.loads(failed_path.read_text(encoding="utf-8"))) if failed_path.exists() else set()
+    titles = {json.loads(l)["title"] for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()}
+    save_seen(load_seen() | (titles - failed))
 
 
 # --- omr / conversions -------------------------------------------------------
@@ -234,12 +249,21 @@ def cmd_publish(args) -> None:
         published.append(r)
         print(f"  → {target}")
     write_summary(published, rows)
+    mark_seen()
     cmd_catalog(args)
 
 
 def write_summary(published: list[dict], rows: list[dict]) -> None:
     """Résumé Markdown (corps de la pull request du robot de curation)."""
     lines = [f"**{len(published)} nouveau(x) morceau(x)** sur {len(rows)} partitions analysées.", ""]
+    candidates = WORK / "candidates.jsonl"
+    if candidates.exists():
+        works = [json.loads(l) for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()]
+        failed_path = WORK / "fetch-failed.json"
+        failed = json.loads(failed_path.read_text(encoding="utf-8")) if failed_path.exists() else []
+        lines += [f"{len(works)} œuvres IMSLP examinées, dont {sum(w.get('has_symbolic', False) for w in works)} "
+                  f"avec un fichier numérique (MusicXML/MIDI) ; {len(failed)} en échec de téléchargement "
+                  "(réessayées au prochain passage).", ""]
     if published:
         lines += ["| Niveau | Complexité | Titre | Compositeur | Tessiture | Licence | Source |",
                   "|---|---|---|---|---|---|---|"]
@@ -281,7 +305,6 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("discover"); d.add_argument("--category", action="append")
     d.add_argument("--limit", type=int, default=200, help="œuvres nouvelles examinées par catégorie")
-    d.add_argument("--no-mark-seen", action="store_true", help="ne pas enregistrer les œuvres dans content/imslp-seen.json")
     f = sub.add_parser("fetch"); f.add_argument("--pdf", action="store_true"); f.add_argument("--allow-nc", action="store_true")
     o = sub.add_parser("omr"); o.add_argument("--audiveris")
     sub.add_parser("analyse")

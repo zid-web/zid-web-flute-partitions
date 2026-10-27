@@ -10,7 +10,7 @@ on:
     inputs:
       limit:
         description: "Nouvelles œuvres examinées par catégorie IMSLP"
-        default: "60"
+        default: "150"
       per_level:
         description: "Morceaux ajoutés au maximum par niveau (1 à 5)"
         default: "3"
@@ -40,17 +40,17 @@ jobs:
         with:
           python-version: "3.12"
       - name: Découverte des œuvres
-        run: python3 "$CURATOR" discover --limit "${{ inputs.limit || '60' }}"
+        run: python3 -u "$CURATOR" discover --limit "${{ inputs.limit || '150' }}"
       - name: Téléchargement des partitions numériques
         env:
           IMSLP_USERNAME: ${{ secrets.IMSLP_USERNAME }}
           IMSLP_PASSWORD: ${{ secrets.IMSLP_PASSWORD }}
-        run: python3 "$CURATOR" fetch
+        run: python3 -u "$CURATOR" fetch
       - name: Analyse (partie de flûte, difficulté, niveau)
-        run: python3 "$CURATOR" analyse
+        run: python3 -u "$CURATOR" analyse
       - name: Sélection
         run: >
-          python3 "$CURATOR" publish
+          python3 -u "$CURATOR" publish
           --per-level "${{ inputs.per_level || '3' }}"
           --max-level "${{ inputs.max_level || '5' }}"
       - name: Tests du skill
