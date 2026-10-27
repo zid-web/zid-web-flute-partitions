@@ -1,0 +1,16 @@
+{
+  "id": "gamme-de-sol",
+  "title": "Ma première gamme (Sol majeur)",
+  "composer": "Exercice",
+  "time": "4/4",
+  "fifths": 1,
+  "tempo": 60,
+  "source": "Exercice original",
+  "license": "CC0",
+  "origin": "original",
+  "tags": [
+    "exercice",
+    "gamme"
+  ],
+  "file": "gamme-de-sol.musicxml"
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Fenêtre principale : aucune API native nécessaire (tout est dans la WebView).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

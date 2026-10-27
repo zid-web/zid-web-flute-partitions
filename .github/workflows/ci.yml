@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests
+      - name: Le catalogue est à jour
+        run: |
+          python3 .claude/skills/imslp-flute-curator/scripts/curate.py catalog
+          git diff --exit-code public/scores/catalog.json
+      - run: npm run build

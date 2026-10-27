@@ -1,0 +1,16 @@
+{
+  "id": "frere-jacques",
+  "title": "Frère Jacques",
+  "composer": "Traditionnel français",
+  "time": "4/4",
+  "fifths": 0,
+  "tempo": 90,
+  "source": "Répertoire traditionnel",
+  "license": "Domaine public",
+  "origin": "original",
+  "tags": [
+    "comptine",
+    "canon"
+  ],
+  "file": "frere-jacques.musicxml"
+}

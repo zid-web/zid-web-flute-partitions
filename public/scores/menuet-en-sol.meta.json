@@ -1,0 +1,15 @@
+{
+  "id": "menuet-en-sol",
+  "title": "Menuet en sol (BWV Anh. 114)",
+  "composer": "Christian Petzold (attr. J.-S. Bach)",
+  "time": "3/4",
+  "fifths": 1,
+  "tempo": 104,
+  "source": "Petit livre d'Anna Magdalena Bach (1725), domaine public",
+  "license": "Domaine public",
+  "origin": "original",
+  "tags": [
+    "baroque"
+  ],
+  "file": "menuet-en-sol.musicxml"
+}
