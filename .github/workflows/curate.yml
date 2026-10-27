@@ -17,6 +17,13 @@ on:
       max_level:
         description: "Niveau maximal proposé (1 à 5)"
         default: "5"
+      omr:
+        description: "Reconnaître aussi les PDF de flûte seule (Audiveris)"
+        type: boolean
+        default: true
+      max_pdf:
+        description: "PDF reconnus au maximum (≈ 2 à 5 min chacun)"
+        default: "8"
   schedule:
     - cron: "17 4 1 * *" # le 1er de chaque mois
 
@@ -31,7 +38,7 @@ concurrency:
 jobs:
   curate:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       CURATOR: .claude/skills/imslp-flute-curator/scripts/curate.py
     steps:
@@ -41,11 +48,35 @@ jobs:
           python-version: "3.12"
       - name: Découverte des œuvres
         run: python3 -u "$CURATOR" discover --limit "${{ inputs.limit || '150' }}"
-      - name: Téléchargement des partitions numériques
+      - name: Téléchargement (MusicXML, et PDF de flûte seule pour l'OMR)
         env:
           IMSLP_USERNAME: ${{ secrets.IMSLP_USERNAME }}
           IMSLP_PASSWORD: ${{ secrets.IMSLP_PASSWORD }}
-        run: python3 -u "$CURATOR" fetch
+        run: >
+          python3 -u "$CURATOR" fetch
+          ${{ (github.event_name == 'schedule' || inputs.omr) && '--pdf' || '' }}
+          --max-pdf "${{ inputs.max_pdf || '8' }}"
+      - name: PDF à reconnaître ?
+        id: pdfs
+        run: echo "count=$(ls skill-work/raw/*.pdf 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: Installation d'Audiveris (reconnaissance optique)
+        if: steps.pdfs.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Paquet Ubuntu de la dernière version publiée d'Audiveris (Java inclus).
+          asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
+            | grep -E 'ubuntu24.*\.deb$' | head -1)
+          [ -n "$asset" ] || asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
+            | grep -E 'ubuntu.*x86_64.*\.deb$|\.deb$' | head -1)
+          echo "Paquet : $asset"
+          gh release download --repo Audiveris/audiveris --pattern "$asset" --dir "$RUNNER_TEMP"
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb "$RUNNER_TEMP/$asset"
+          ls /opt/audiveris/bin || dpkg -L "$(dpkg-deb -f "$RUNNER_TEMP/$asset" Package)" | grep -i 'bin/'
+      - name: Reconnaissance des PDF (OMR)
+        if: steps.pdfs.outputs.count != '0'
+        run: xvfb-run -a python3 -u "$CURATOR" omr
       - name: Analyse (partie de flûte, difficulté, niveau)
         run: python3 -u "$CURATOR" analyse
       - name: Sélection

@@ -290,6 +290,12 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
         </label>
       </section>
       {micError && <p className="message error">{micError}</p>}
+      {entry.origin === "omr" && (
+        <p className="omr-note">
+          🔍 Partition reconnue automatiquement à partir d'un PDF scanné : une note peut être fausse. En cas de doute,
+          comparez avec l'original{entry.sourceUrl ? " sur IMSLP" : ""}.
+        </p>
+      )}
 
       <section className="sheet">
         {loading && !loadError && <p className="message">Préparation de la partition…</p>}
