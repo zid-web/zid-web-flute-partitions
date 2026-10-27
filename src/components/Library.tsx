@@ -82,6 +82,11 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
                 <span className="level-badge">
                   Niveau {e.level} · {LEVEL_LABELS[e.level]}
                   {e.origin === "import" && <span className="mine-badge">importée</span>}
+                  {e.origin === "omr" && (
+                    <span className="mine-badge" title="Reconnue automatiquement à partir d'un PDF scanné">
+                      🔍 reconnue
+                    </span>
+                  )}
                 </span>
                 <strong className="title">{e.title}</strong>
                 <span className="composer">{e.composer}</span>

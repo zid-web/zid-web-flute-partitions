@@ -23,9 +23,12 @@ dans `skill-work/` (ignoré par git).
    et servent d'attribution. Attention : IMSLP est au Canada ; une œuvre d'un compositeur mort il
    y a moins de 70 ans peut être protégée en France — vérifier le champ `Copyright` du fichier.
 3. **Politesse** : 1 requête/seconde maximum (`--delay`), pas de téléchargement massif inutile.
-4. **OMR = à relire** : toute partition issue de la reconnaissance optique (`origin: "omr"`) est
-   marquée `needsReview` et **n'est pas publiée** par défaut. La relire (MuseScore) avant de
-   la publier avec `--include-review` ou après correction.
+4. **OMR = à vérifier** : IMSLP est presque entièrement en PDF scannés (0 MusicXML sur 600 œuvres
+   au 2ᵉ passage). Les PDF de **flûte seule** (catégorie « For flute ») sont reconnus par Audiveris.
+   Un résultat n'est proposé que si au moins 85 % de ses mesures ont la bonne durée
+   (`rhythm_consistency`), sinon il est écarté (`needsReview`). Les morceaux reconnus portent
+   `origin: "omr"` : badge « 🔍 reconnue » dans l'application et colonne Origine dans la pull request,
+   à écouter et comparer au PDF avant fusion.
 
 ## Pipeline
 
@@ -38,7 +41,8 @@ python3 .claude/skills/imslp-flute-curator/scripts/curate.py discover --limit 30
 # 2. Télécharger les fichiers numériques (MusicXML/MIDI) ; --pdf ajoute les PDF pour l'OMR
 IMSLP_USERNAME=… IMSLP_PASSWORD=… python3 .claude/skills/imslp-flute-curator/scripts/curate.py fetch
 
-# 3. (optionnel) OMR des PDF avec Audiveris → skill-work/omr/*.mxl
+#    --pdf : un PDF (partition complète, ≤ --max-pages pages) par œuvre pour flûte seule, --max-pdf au plus
+# 3. OMR des PDF avec Audiveris (titre et compositeur repris d'IMSLP) → skill-work/omr/*.mxl
 python3 .claude/skills/imslp-flute-curator/scripts/curate.py omr
 
 # 4. Extraire la partie de flûte et calculer difficulté + niveau → skill-work/analysed.json

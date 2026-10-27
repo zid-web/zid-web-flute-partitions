@@ -31,8 +31,9 @@ Deux chemins, sans jamais relier l'application en direct à IMSLP (hors ligne, d
 ### 1. Catalogue commun : robot « Curation IMSLP » (GitHub Actions)
 
 Onglet **Actions → Curation IMSLP → Run workflow** (ou automatiquement le 1er de chaque mois).
-Le robot cherche de nouvelles œuvres pour flûte sur IMSLP, ne garde que les licences libres et les fichiers
-MusicXML, extrait la partie de flûte, calcule niveau et complexité, puis **ouvre une pull request** avec le
+Le robot cherche de nouvelles œuvres pour flûte sur IMSLP, ne garde que les licences libres, récupère les
+fichiers MusicXML et, pour la flûte seule, **reconnaît les PDF scannés** (Audiveris ; morceaux marqués
+« 🔍 reconnue », à écouter avant validation), extrait la partie de flûte, calcule niveau et complexité, puis **ouvre une pull request** avec le
 tableau des morceaux proposés. Rien n'est publié tant que la pull request n'est pas fusionnée ; à la fusion,
 Vercel met le site à jour. `content/imslp-seen.json` mémorise les œuvres déjà examinées : chaque passage avance.
 

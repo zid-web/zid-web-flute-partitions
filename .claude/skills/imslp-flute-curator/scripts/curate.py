@@ -85,22 +85,51 @@ def cmd_discover(args) -> None:
 
 
 # --- fetch --------------------------------------------------------------------
+SYMBOLIC_EXTS = (".mxl", ".xml", ".musicxml", ".mid", ".midi")
+# Les PDF ne sont convertis (OMR) que pour la flûte seule : une partition avec piano ou basse continue
+# donnerait une reconnaissance bien moins fiable.
+OMR_CATEGORIES = {"For flute"}
+SCORE_HINT = re.compile(r"complete score|full score|^score|partition|flute|flûte|flöte|flauto", re.I)
+REJECT_HINT = re.compile(r"\bparts?\b(?!.*flute)|piano|cover|title|preface|commentary|manuscript", re.I)
+
+
+def pdf_page_count(path: Path) -> int:
+    """Nombre de pages d'un PDF, sans dépendance (approximation fiable pour les scans IMSLP)."""
+    data = path.read_bytes()
+    return len(re.findall(rb"/Type\s*/Page(?![a-zA-Z])", data))
+
+
+def pick_pdf(work: dict) -> dict | None:
+    """Choisit au plus un PDF par œuvre : la partition complète, pas les parties séparées ni les notices."""
+    pdfs = [f for f in work["files"] if f["name"].lower().endswith(".pdf")]
+    good = [f for f in pdfs if SCORE_HINT.search(f.get("description", "")) and not REJECT_HINT.search(f.get("description", ""))]
+    return (good or pdfs[:1] or [None])[0]
+
+
 def cmd_fetch(args) -> None:
     client = Imslp(delay=args.delay)
-    print("Connexion IMSLP :", client.login(), flush=True)
+    status = client.login()
+    print("Connexion IMSLP :", status, flush=True)
+    (WORK / "login.txt").write_text(status, encoding="utf-8")
     raw = WORK / "raw"
     failed: set[str] = set()
     raw.mkdir(parents=True, exist_ok=True)
     manifest = WORK / "fetched.jsonl"
+    pdf_count = 0
     with manifest.open("a", encoding="utf-8") as fh:
         for line in (WORK / "candidates.jsonl").read_text(encoding="utf-8").splitlines():
             work = json.loads(line)
-            for f in work["files"]:
+            files = [f for f in work["files"] if f["name"].lower().endswith(SYMBOLIC_EXTS)]
+            if args.pdf and not files and work.get("category") in OMR_CATEGORIES:
+                pdf = pick_pdf(work)
+                if pdf:
+                    if pdf_count >= args.max_pdf:
+                        failed.add(work["title"])  # quota atteint : l'œuvre sera reprise au passage suivant
+                        continue
+                    files = [pdf]
+            for f in files:
                 name = f["name"]
                 ext = Path(name).suffix.lower()
-                wanted = ext in (".mxl", ".xml", ".musicxml", ".mid", ".midi") or (args.pdf and ext == ".pdf")
-                if not wanted:
-                    continue
                 if not (args.allow_nc or is_public_domain(f.get("copyright", ""))):
                     print(f"  ⨯ licence ignorée ({f.get('copyright') or '?'}) : {name}")
                     continue
@@ -113,12 +142,19 @@ def cmd_fetch(args) -> None:
                     print(f"  ! {name}: {exc}", flush=True)
                     failed.add(work["title"])
                     continue
+                if ext == ".pdf":
+                    pages = pdf_page_count(dest)
+                    if not 0 < pages <= args.max_pages:
+                        print(f"  ⨯ {pages} pages (> {args.max_pages}) : {name}", flush=True)
+                        dest.unlink()
+                        continue
+                    pdf_count += 1
                 fh.write(json.dumps({"path": str(dest), "work": work["title"], "url": work["url"],
                                      "composer": work["composer"], "copyright": f.get("copyright", ""),
                                      "description": f.get("description", "")}, ensure_ascii=False) + "\n")
                 print(f"  ↓ {dest}", flush=True)
     (WORK / "fetch-failed.json").write_text(json.dumps(sorted(failed), ensure_ascii=False), encoding="utf-8")
-    print(f"{len(failed)} œuvre(s) en échec de téléchargement (réessayées au prochain passage)")
+    print(f"{pdf_count} PDF à reconnaître ; {len(failed)} œuvre(s) reportée(s) ou en échec (reprises au prochain passage)")
 
 
 def mark_seen() -> None:
@@ -133,15 +169,27 @@ def mark_seen() -> None:
 
 
 # --- omr / conversions -------------------------------------------------------
+def find_audiveris(explicit: str | None) -> str | None:
+    candidates = [explicit, shutil.which("audiveris"), shutil.which("Audiveris")]
+    candidates += sorted(str(p) for p in Path("/opt").glob("*/bin/[Aa]udiveris*"))
+    return next((c for c in candidates if c and Path(c).exists()), None)
+
+
 def cmd_omr(args) -> None:
-    exe = shutil.which("audiveris") or shutil.which("Audiveris")
+    exe = find_audiveris(args.audiveris)
     if not exe:
         sys.exit("Audiveris introuvable : installez-le (https://audiveris.github.io) ou passez --audiveris CHEMIN")
     out = WORK / "omr"
     out.mkdir(parents=True, exist_ok=True)
     for pdf in sorted((WORK / "raw").glob("*.pdf")):
-        print(f"OMR {pdf.name}…")
-        subprocess.run([args.audiveris or exe, "-batch", "-export", "-output", str(out), str(pdf)], check=False)
+        print(f"OMR {pdf.name}…", flush=True)
+        try:
+            subprocess.run([exe, "-batch", "-export", "-output", str(out), "--", str(pdf)],
+                           check=False, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            print(f"  ! délai dépassé ({args.timeout} s) : {pdf.name}", flush=True)
+    found = sorted(p.name for p in out.glob("**/*.mxl"))
+    print(f"{len(found)} partition(s) reconnue(s) : {', '.join(found) or '—'}")
 
 
 def convert_midi(args) -> None:
@@ -181,6 +229,77 @@ def extract_flute_part(src: Path, dest: Path) -> bool:
     return True
 
 
+OMR_MIN_RHYTHM = 0.85
+
+
+def rhythm_consistency(path: Path) -> float:
+    """Part des mesures dont la durée correspond à la signature rythmique (1.0 = parfait).
+
+    Indicateur de qualité de l'OMR : une note ou un silence mal reconnu « casse » la mesure.
+    La première et la dernière mesure (anacrouse) sont ignorées.
+    """
+    root = read_root(path)
+    part = root.find("part")
+    if part is None:
+        return 0.0
+    divisions, expected = 1, None
+    checked = ok = 0
+    measures = part.findall("measure")
+    for i, measure in enumerate(measures):
+        attrs = measure.find("attributes")
+        if attrs is not None:
+            divisions = int(attrs.findtext("divisions") or divisions)
+            if attrs.find("time/beats") is not None:
+                beats = sum(int(b) for b in attrs.findtext("time/beats").split("+"))
+                expected = beats * 4 / int(attrs.findtext("time/beat-type"))
+        if expected is None or i in (0, len(measures) - 1):
+            continue
+        per_voice: dict[str, float] = {}
+        for note in measure.findall("note"):
+            if note.find("chord") is not None or note.find("grace") is not None:
+                continue
+            voice = note.findtext("voice") or "1"
+            per_voice[voice] = per_voice.get(voice, 0) + int(note.findtext("duration") or 0) / divisions
+        if not per_voice:
+            continue
+        checked += 1
+        ok += abs(max(per_voice.values()) - expected) < 1e-6
+    return round(ok / checked, 3) if checked else 0.0
+
+
+def imslp_title(work_title: str) -> tuple[str, str]:
+    """« Sonate, Op.2 (Telemann, Georg Philipp) » → (« Sonate, Op.2 », « Georg Philipp Telemann »)."""
+    m = re.match(r"^(.*)\s+\(([^()]*)\)\s*$", work_title)
+    if not m:
+        return work_title, ""
+    title, composer = m.group(1), m.group(2)
+    if "," in composer:
+        last, first = (x.strip() for x in composer.split(",", 1))
+        composer = f"{first} {last}"
+    return title, composer
+
+
+def set_titles(path: Path, title: str, composer: str) -> None:
+    """Remplace titre et compositeur (l'OMR met souvent le nom du fichier)."""
+    root = read_root(path)
+    work = root.find("work")
+    if work is None:
+        work = ET.Element("work")
+        root.insert(0, work)
+    (work.find("work-title") if work.find("work-title") is not None else ET.SubElement(work, "work-title")).text = title
+    for mt in root.findall("movement-title"):
+        root.remove(mt)
+    ident = root.find("identification")
+    if ident is None:
+        ident = ET.Element("identification")
+        root.insert(1, ident)
+    creator = next((c for c in ident.findall("creator") if c.get("type") == "composer"), None)
+    if creator is None:
+        creator = ET.SubElement(ident, "creator", type="composer")
+    creator.text = composer
+    path.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8"))
+
+
 def cmd_analyse(args) -> None:
     meta = {}
     manifest = WORK / "fetched.jsonl"
@@ -196,16 +315,21 @@ def cmd_analyse(args) -> None:
     sources += [(p, "omr") for p in (WORK / "omr").glob("**/*.mxl")]
     for src, origin in sorted(sources):
         dest = flutes / f"{src.stem}.musicxml"
+        m = meta.get(src.stem.split(".")[0], {})
         try:
             if not extract_flute_part(src, dest):
                 print(f"  · pas de partie de flûte : {src.name}")
                 continue
+            if m.get("work"):
+                set_titles(dest, *imslp_title(m["work"]))
             a = analyse(dest)
         except Exception as exc:  # noqa: BLE001
             print(f"  ! {src.name}: {exc}")
             continue
-        m = meta.get(src.stem.split(".")[0], {})
         problems = []
+        rhythm = rhythm_consistency(dest)
+        if origin == "omr" and rhythm < OMR_MIN_RHYTHM:
+            problems.append(f"reconnaissance incertaine ({round(rhythm * 100)} % de mesures justes)")
         if a.low_midi < 59 or a.high_midi > 98:  # flûte en ut : Si3 (patte de si) → Ré7
             problems.append("hors tessiture de la flûte")
         if a.note_count < 8:
@@ -215,8 +339,8 @@ def cmd_analyse(args) -> None:
         results.append(asdict(a) | {
             "id": slug(f"{a.composer}-{a.title}") or src.stem, "path": str(dest), "origin": origin,
             "sourceUrl": m.get("url"), "license": m.get("copyright") or "Domaine public",
-            "imslpWork": m.get("work"), "problems": problems,
-            "needsReview": origin == "omr" or bool(problems),
+            "imslpWork": m.get("work"), "problems": problems, "rhythm": rhythm,
+            "needsReview": bool(problems),
         })
         print(f"  ✓ niveau {a.level} ({a.complexity:3d}) {a.title} — {a.composer}{'  ⚠ ' + ', '.join(problems) if problems else ''}")
     results.sort(key=lambda r: (r["level"], r["complexity"]))
@@ -256,28 +380,36 @@ def cmd_publish(args) -> None:
 def write_summary(published: list[dict], rows: list[dict]) -> None:
     """Résumé Markdown (corps de la pull request du robot de curation)."""
     lines = [f"**{len(published)} nouveau(x) morceau(x)** sur {len(rows)} partitions analysées.", ""]
+    login = WORK / "login.txt"
+    if login.exists():
+        lines += [f"Connexion au compte IMSLP : {login.read_text(encoding='utf-8')}.", ""]
     candidates = WORK / "candidates.jsonl"
     if candidates.exists():
         works = [json.loads(l) for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()]
         failed_path = WORK / "fetch-failed.json"
         failed = json.loads(failed_path.read_text(encoding="utf-8")) if failed_path.exists() else []
+        pdfs = len(list((WORK / "raw").glob("*.pdf"))) if (WORK / "raw").exists() else 0
         lines += [f"{len(works)} œuvres IMSLP examinées, dont {sum(w.get('has_symbolic', False) for w in works)} "
-                  f"avec un fichier numérique (MusicXML/MIDI) ; {len(failed)} en échec de téléchargement "
-                  "(réessayées au prochain passage).", ""]
+                  f"avec un fichier numérique (MusicXML/MIDI) ; {pdfs} PDF envoyé(s) à la reconnaissance (OMR) ; "
+                  f"{len(failed)} œuvre(s) reportée(s) ou en échec (reprises au prochain passage).", ""]
     if published:
-        lines += ["| Niveau | Complexité | Titre | Compositeur | Tessiture | Licence | Source |",
-                  "|---|---|---|---|---|---|---|"]
+        lines += ["| Niveau | Complexité | Titre | Compositeur | Tessiture | Origine | Licence | Source |",
+                  "|---|---|---|---|---|---|---|---|"]
         for r in sorted(published, key=lambda r: (r["level"], r["complexity"])):
             src = f"[IMSLP]({r['sourceUrl']})" if r.get("sourceUrl") else "—"
+            origin = (f"🔍 reconnue ({round(r.get('rhythm', 0) * 100)} % mesures justes)"
+                      if r["origin"] == "omr" else "MusicXML")
             lines.append(f"| {r['level']} | {r['complexity']} | {r['title']} | {r['composer']} | "
-                         f"{r['low']}–{r['high']} | {r['license']} | {src} |")
+                         f"{r['low']}–{r['high']} | {origin} | {r['license']} | {src} |")
     review = [r for r in rows if r["needsReview"]]
     if review:
-        lines += ["", f"<details><summary>{len(review)} partition(s) écartée(s) ou à relire</summary>", ""]
-        lines += [f"- {r['title']} — {r['composer']} : {', '.join(r['problems']) or 'OMR à relire'}" for r in review]
+        lines += ["", f"<details><summary>{len(review)} partition(s) écartée(s)</summary>", ""]
+        lines += [f"- {r['title']} — {r['composer']} : {', '.join(r['problems'])}" for r in review]
         lines += ["", "</details>"]
-    lines += ["", "**Avant de fusionner** : ouvrir l'aperçu Vercel de cette pull request, lancer « Écouter » sur chaque",
-              "nouveau morceau et vérifier la licence sur IMSLP. Fermer la pull request (ou retirer un fichier) pour refuser."]
+    lines += ["", "**Avant de fusionner** : ouvrir l'aperçu Vercel de cette pull request et lancer « Écouter » sur chaque",
+              "nouveau morceau. Les morceaux 🔍 viennent d'un PDF scanné : comparer avec le PDF IMSLP (lien Source),",
+              "une fausse note s'entend souvent. Pour refuser un morceau, supprimer ses deux fichiers",
+              "`public/scores/<id>.*` dans la pull request ; pour tout refuser, fermer la pull request."]
     (WORK / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -305,8 +437,12 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("discover"); d.add_argument("--category", action="append")
     d.add_argument("--limit", type=int, default=200, help="œuvres nouvelles examinées par catégorie")
-    f = sub.add_parser("fetch"); f.add_argument("--pdf", action="store_true"); f.add_argument("--allow-nc", action="store_true")
+    f = sub.add_parser("fetch"); f.add_argument("--allow-nc", action="store_true")
+    f.add_argument("--pdf", action="store_true", help="télécharge aussi un PDF par œuvre pour flûte seule (pour l'OMR)")
+    f.add_argument("--max-pdf", type=int, default=8, help="PDF au maximum par passage")
+    f.add_argument("--max-pages", type=int, default=6, help="pages au maximum par PDF")
     o = sub.add_parser("omr"); o.add_argument("--audiveris")
+    o.add_argument("--timeout", type=int, default=900, help="secondes au maximum par PDF")
     sub.add_parser("analyse")
     pub = sub.add_parser("publish")
     pub.add_argument("--ids", nargs="*"); pub.add_argument("--min-level", type=int, default=1)

@@ -67,6 +67,35 @@ class CuratorTest(unittest.TestCase):
         self.assertLess(easy.complexity, harder.complexity)
         self.assertEqual((easy.low, easy.high), ("Ré4", "Si4"))
 
+    def test_pdf_helpers(self):
+        with tempfile.TemporaryDirectory() as d:
+            pdf = Path(d, "x.pdf")
+            pdf.write_bytes(b"%PDF-1.4 /Type /Pages /Kids [] /Type /Page /Type/Page /Type /Page /Type /Catalog")
+            self.assertEqual(curate.pdf_page_count(pdf), 3)
+        work = {"files": [{"name": "a.pdf", "description": "Piano part"},
+                          {"name": "b.pdf", "description": "Complete Score"},
+                          {"name": "c.pdf", "description": "Preface"}]}
+        self.assertEqual(curate.pick_pdf(work)["name"], "b.pdf")
+        self.assertIsNone(curate.pick_pdf({"files": [{"name": "x.mxl"}]}))
+
+    def test_imslp_title(self):
+        self.assertEqual(curate.imslp_title("Flute Sonata, Op.2 (Telemann, Georg Philipp)"),
+                         ("Flute Sonata, Op.2", "Georg Philipp Telemann"))
+        self.assertEqual(curate.imslp_title("Syrinx"), ("Syrinx", ""))
+
+    def test_rhythm_consistency_and_titles(self):
+        sample = ROOT / "public/scores/menuet-en-sol.musicxml"
+        self.assertEqual(curate.rhythm_consistency(sample), 1.0)
+        with tempfile.TemporaryDirectory() as d:
+            broken = Path(d, "omr.musicxml")
+            # Une croche « perdue » dans la 2e mesure, comme le ferait une OMR imparfaite.
+            text = sample.read_text().replace("<duration>2</duration>", "<duration>1</duration>", 6)
+            broken.write_text(text)
+            self.assertLess(curate.rhythm_consistency(broken), 1.0)
+            curate.set_titles(broken, "Menuet", "Christian Petzold")
+            a = analyse(broken)
+            self.assertEqual((a.title, a.composer), ("Menuet", "Christian Petzold"))
+
     def test_absolute_url(self):
         self.assertEqual(absolute_url("//imslp.org/images/4/4f/X.mxl"), "https://imslp.org/images/4/4f/X.mxl")
         self.assertEqual(absolute_url("/images/X.mxl"), "https://imslp.org/images/X.mxl")
