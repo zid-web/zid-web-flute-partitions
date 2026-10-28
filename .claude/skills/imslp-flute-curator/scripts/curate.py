@@ -308,7 +308,7 @@ def split_pdf(pdf: Path, dest: Path) -> list[Path]:
 
 
 def merge_pages(pages: list[Path], dest: Path) -> int:
-    """Met bout à bout la partie de flûte de chaque page reconnue. Renvoie le nombre de pages gardées."""
+    """Met bout à bout la partie de flûte de chaque page (ou morceau) reconnu. Renvoie le nombre gardé."""
     merged = None
     kept = 0
     for page in pages:
@@ -363,7 +363,9 @@ def cmd_omr(args) -> None:
         run_audiveris(exe, pages, page_out, args.timeout)
         found = sorted(page_out.glob("p*.mxl"))
         kept = merge_pages(found, out / f"{pdf.stem}.mxl")
-        print(f"  {len(found)} page(s) reconnue(s) sur {len(pages)}, {kept} gardée(s) avec de la flûte", flush=True)
+        recognised = len({f.name.split(".")[0] for f in found})  # une page peut contenir plusieurs morceaux
+        print(f"  {recognised} page(s) reconnue(s) sur {len(pages)} ({len(found)} morceau(x), {kept} gardé(s) avec de la flûte)",
+              flush=True)
     found = sorted(p.name for p in out.glob("*.mxl"))
     print(f"{len(found)} partition(s) reconnue(s) : {', '.join(found) or '—'}")
 
