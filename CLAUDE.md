@@ -2,7 +2,8 @@
 
 Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français partout dans l'UI.
 
-- Tests : `npm test` (vitest) et `python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests`.
+- Tests : `npm test` (vitest), `python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests` et `python3 -m unittest discover -s .claude/skills/omr-notes/tests`.
+- OMR d'une partition à relire (Audiveris → .mxl → MuseScore .mscz + PDF de contrôle) : skill `omr-notes`, sorties dans `skill-work/omr-notes/`.
 - Typecheck : `npm run typecheck`. Build web : `npm run build`.
 - La logique de suivi de partition reste **pure** dans `src/lib/follower.ts` (pas d'audio ni de DOM) et testée.
 - Hauteurs : numéros MIDI ; OSMD : octave 1 = octave MusicXML 4 (`noteToMidi` dans `src/lib/score.ts`).
