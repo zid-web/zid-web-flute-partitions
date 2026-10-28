@@ -21,6 +21,7 @@ jobs:
       - run: npm test
       - run: pip install pypdf==5.9.0
       - run: python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests
+      - run: python3 -m unittest discover -s .claude/skills/omr-notes/tests
       - name: Le catalogue est à jour
         run: |
           python3 .claude/skills/imslp-flute-curator/scripts/curate.py catalog
