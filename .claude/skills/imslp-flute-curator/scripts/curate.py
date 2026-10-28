@@ -132,6 +132,9 @@ def cmd_fetch(args) -> None:
     status = client.login()
     print("Connexion IMSLP :", status, flush=True)
     (WORK / "login.txt").write_text(status, encoding="utf-8")
+    logged_in = status.startswith("OK")
+    if args.pdf and not logged_in:
+        print("⚠ Sans connexion au compte, les PDF sont reportés au prochain passage.", flush=True)
     raw = WORK / "raw"
     failed: set[str] = set()
     raw.mkdir(parents=True, exist_ok=True)
@@ -144,7 +147,8 @@ def cmd_fetch(args) -> None:
             if args.pdf and not files and work.get("category") in OMR_CATEGORIES:
                 pdf = pick_pdf(work)
                 if pdf:
-                    if pdf_count >= args.max_pdf:
+                    # Sans compte, IMSLP impose une page d'attente : le téléchargement échouerait.
+                    if pdf_count >= args.max_pdf or not logged_in:
                         failed.add(work["title"])  # quota atteint : l'œuvre sera reprise au passage suivant
                         continue
                     files = [pdf]
@@ -409,7 +413,10 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
     lines = [f"**{len(published)} nouveau(x) morceau(x)** sur {len(rows)} partitions analysées.", ""]
     login = WORK / "login.txt"
     if login.exists():
-        lines += [f"Connexion au compte IMSLP : {login.read_text(encoding='utf-8')}.", ""]
+        status = login.read_text(encoding="utf-8")
+        lines += [f"Connexion au compte IMSLP : {status}." + ("" if status.startswith("OK") else
+                  " ⚠️ **Les PDF n'ont pas pu être téléchargés** (IMSLP impose une attente sans compte) : "
+                  "vérifier les secrets IMSLP_USERNAME / IMSLP_PASSWORD puis relancer."), ""]
     candidates = WORK / "candidates.jsonl"
     if candidates.exists():
         works = [json.loads(l) for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()]
