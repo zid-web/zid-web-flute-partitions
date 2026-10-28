@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import gzip
 import http.cookiejar
 import json
 import os
@@ -71,7 +72,7 @@ class Imslp:
         body = urllib.parse.urlencode(data).encode() if data is not None else None
         with self.opener.open(url, body, timeout=60) as res:
             self._last = time.monotonic()
-            return res.read()
+            return decode_body(res.read(), res.headers.get("Content-Encoding", ""))
 
     def api(self, **params) -> dict:
         params.setdefault("format", "json")
@@ -141,10 +142,24 @@ class Imslp:
         content = self._get(url)
         problem = check_content(file_name, content)
         if problem:
-            raise RuntimeError(problem)
+            raise (BotCheckError if "Bot Check" in problem else RuntimeError)(problem)
         with open(dest, "wb") as fh:
             fh.write(content)
         return dest
+
+
+class BotCheckError(RuntimeError):
+    """IMSLP a répondu par sa page anti-robot : les téléchargements automatiques sont refusés."""
+
+
+def decode_body(content: bytes, encoding: str = "") -> bytes:
+    """urllib ne décompresse pas les réponses gzip : IMSLP en envoie (vu au 6ᵉ passage)."""
+    if "gzip" in encoding.lower() or content[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(content)
+        except OSError:
+            return content
+    return content
 
 
 def check_content(file_name: str, content: bytes) -> str | None:

@@ -13,4 +13,5 @@ Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français 
 - Mises à jour : jamais d'installation pendant un morceau (`setBusy`), uniquement depuis la bibliothèque.
 - Difficulté : `difficulty.py` (skill) et `src/lib/difficulty.ts` (import dans l'app) doivent rester identiques ; le test d'import le vérifie sur `catalog.json`.
 - Partitions importées : uniquement sur l'appareil (`src/lib/userScores.ts`, IndexedDB), jamais envoyées sur un serveur.
+- IMSLP bloque les téléchargements automatiques (« Bot Check ») : ne jamais chercher à le contourner ; les PDF passent par le dépôt manuel `content/a-convertir/` (workflow « Conversion des partitions déposées »).
 - Pas de connexion directe de l'application à IMSLP : le catalogue passe par le workflow « Curation IMSLP » et une pull request validée.

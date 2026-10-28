@@ -26,12 +26,15 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).parent))
 from difficulty import analyse, read_root  # noqa: E402
-from imslp import Imslp, ImslpWork, is_public_domain  # noqa: E402
+from imslp import BotCheckError, Imslp, ImslpWork, is_public_domain  # noqa: E402
 
 WORK = Path("skill-work")
 SCORES = Path("public/scores")
 # Œuvres IMSLP déjà examinées (publiées ou écartées), versionné : chaque passage avance dans le catalogue.
 SEEN = Path("content/imslp-seen.json")
+# PDF / MusicXML déposés à la main (téléchargés sur IMSLP depuis un navigateur), convertis par le robot.
+INBOX = Path("content/a-convertir")
+INBOX_EXTS = (".pdf", ".mxl", ".musicxml", ".xml")
 FLUTE = re.compile(r"\b(flute|flûte|flauto|flöte|fl\.)", re.I)
 DEFAULT_CATEGORIES = ["For flute", "For flute, piano", "For 2 flutes", "For flute, continuo"]
 
@@ -140,6 +143,7 @@ def cmd_fetch(args) -> None:
     raw.mkdir(parents=True, exist_ok=True)
     manifest = WORK / "fetched.jsonl"
     pdf_count = 0
+    bot_checks = 0
     with manifest.open("a", encoding="utf-8") as fh:
         for line in (WORK / "candidates.jsonl").read_text(encoding="utf-8").splitlines():
             work = json.loads(line)
@@ -161,12 +165,21 @@ def cmd_fetch(args) -> None:
                 dest = raw / f"{slug(work['title'])}--{slug(Path(name).stem)}{ext}"
                 if dest.exists():
                     continue
+                if bot_checks >= 3:
+                    failed.add(work["title"])  # IMSLP refuse les robots : inutile d'insister
+                    continue
                 try:
                     client.download(name, str(dest))
+                except BotCheckError as exc:
+                    bot_checks += 1
+                    print(f"  ! {name}: {exc}", flush=True)
+                    failed.add(work["title"])
+                    continue
                 except Exception as exc:  # noqa: BLE001
                     print(f"  ! {name}: {exc}", flush=True)
                     failed.add(work["title"])
                     continue
+                bot_checks = 0
                 excerpt = None
                 if ext == ".pdf":
                     pages = pdf_page_count(dest)
@@ -183,6 +196,9 @@ def cmd_fetch(args) -> None:
                                      "description": f.get("description", ""), "excerpt": excerpt},
                                     ensure_ascii=False) + "\n")
                 print(f"  ↓ {dest}", flush=True)
+    if bot_checks >= 3:
+        print("⚠ IMSLP renvoie sa page anti-robot (« Bot Check ») : téléchargements arrêtés.", flush=True)
+        (WORK / "bot-check.txt").write_text("1", encoding="utf-8")
     (WORK / "fetch-failed.json").write_text(json.dumps(sorted(failed), ensure_ascii=False), encoding="utf-8")
     print(f"{pdf_count} PDF à reconnaître ; {len(failed)} œuvre(s) reportée(s) ou en échec (reprises au prochain passage)")
 
@@ -196,6 +212,55 @@ def mark_seen() -> None:
     failed = set(json.loads(failed_path.read_text(encoding="utf-8"))) if failed_path.exists() else set()
     titles = {json.loads(l)["title"] for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()}
     save_seen(load_seen() | (titles - failed))
+
+
+# --- dépôt manuel (content/a-convertir) ---------------------------------------
+def inbox_files() -> list[Path]:
+    return sorted(p for p in INBOX.glob("*") if p.is_file() and p.suffix.lower() in INBOX_EXTS)
+
+
+def title_from_filename(stem: str) -> tuple[str, str]:
+    """« Telemann - Fantaisie n°1 » → (« Fantaisie n°1 », « Telemann ») ; sinon (nom du fichier, "")."""
+    stem = re.sub(r"[_]+", " ", stem).strip()
+    if " - " in stem:
+        composer, title = stem.split(" - ", 1)
+        return title.strip(), composer.strip()
+    return stem, ""
+
+
+def cmd_inbox(args) -> None:
+    """Prépare les fichiers déposés dans content/a-convertir pour omr → analyse → publish."""
+    raw = WORK / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    files = inbox_files()
+    processed = []
+    with (WORK / "fetched.jsonl").open("a", encoding="utf-8") as fh:
+        for src in files:
+            title, composer = title_from_filename(src.stem)
+            ext = src.suffix.lower()
+            dest = raw / f"{slug(src.stem) or 'partition'}{ext}"
+            shutil.copyfile(src, dest)
+            excerpt = None
+            if ext == ".pdf":
+                pages = pdf_page_count(dest)
+                if pages > args.max_pages and truncate_pdf(dest, args.max_pages):
+                    excerpt = f"extrait, p. 1–{args.max_pages} sur {pages}"
+            work = f"{title} ({composer})" if composer else title
+            fh.write(json.dumps({"path": str(dest), "work": work, "url": None, "composer": composer,
+                                 "copyright": "À vérifier (déposé dans content/a-convertir)",
+                                 "description": src.name, "excerpt": excerpt,
+                                 "source": "Dépôt manuel (content/a-convertir)"}, ensure_ascii=False) + "\n")
+            processed.append({"file": src.name, "stem": dest.stem})
+            print(f"  ← {src.name}{' (' + excerpt + ')' if excerpt else ''}", flush=True)
+    (WORK / "inbox.json").write_text(json.dumps(processed, ensure_ascii=False), encoding="utf-8")
+    print(f"{len(processed)} fichier(s) déposé(s) à convertir")
+
+
+def cmd_inbox_clean(_args) -> None:
+    """Retire du dossier de dépôt les fichiers traités (la pull request les supprime)."""
+    done = WORK / "inbox.json"
+    for item in json.loads(done.read_text(encoding="utf-8")) if done.exists() else []:
+        (INBOX / item["file"]).unlink(missing_ok=True)
 
 
 # --- omr / conversions -------------------------------------------------------
@@ -370,7 +435,7 @@ def cmd_analyse(args) -> None:
         results.append(asdict(a) | {
             "id": slug(f"{a.composer}-{a.title}") or src.stem, "path": str(dest), "origin": origin,
             "sourceUrl": m.get("url"), "license": m.get("copyright") or "Domaine public",
-            "imslpWork": m.get("work"), "problems": problems, "rhythm": rhythm,
+            "imslpWork": m.get("work"), "problems": problems, "rhythm": rhythm, "source": m.get("source", "IMSLP"),
             "needsReview": bool(problems),
         })
         print(f"  ✓ niveau {a.level} ({a.complexity:3d}) {a.title} — {a.composer}{'  ⚠ ' + ', '.join(problems) if problems else ''}")
@@ -398,7 +463,7 @@ def cmd_publish(args) -> None:
         target = SCORES / f"{r['id']}.musicxml"
         shutil.copyfile(r["path"], target)
         meta = {"id": r["id"], "title": r["title"], "composer": r["composer"], "file": target.name,
-                "source": "IMSLP", "sourceUrl": r.get("sourceUrl"), "license": r["license"], "origin": r["origin"],
+                "source": r.get("source", "IMSLP"), "sourceUrl": r.get("sourceUrl"), "license": r["license"], "origin": r["origin"],
                 "imslpWork": r.get("imslpWork")}
         (SCORES / f"{r['id']}.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         published.append(r)
@@ -417,6 +482,9 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
         lines += [f"Connexion au compte IMSLP : {status}." + ("" if status.startswith("OK") else
                   " ⚠️ **Les PDF n'ont pas pu être téléchargés** (IMSLP impose une attente sans compte) : "
                   "vérifier les secrets IMSLP_USERNAME / IMSLP_PASSWORD puis relancer."), ""]
+    if (WORK / "bot-check.txt").exists():
+        lines += ["⚠️ **IMSLP bloque les téléchargements automatiques** (page « Bot Check ») : déposer les PDF voulus "
+                  "dans `content/a-convertir/` (voir son README), le robot les convertit.", ""]
     candidates = WORK / "candidates.jsonl"
     if candidates.exists():
         works = [json.loads(l) for l in candidates.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -435,6 +503,23 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
                       if r["origin"] == "omr" else "MusicXML")
             lines.append(f"| {r['level']} | {r['complexity']} | {r['title']} | {r['composer']} | "
                          f"{r['low']}–{r['high']} | {origin} | {r['license']} | {src} |")
+    inbox = WORK / "inbox.json"
+    if inbox.exists():
+        items = json.loads(inbox.read_text(encoding="utf-8"))
+        if items:
+            lines += ["", "### Fichiers déposés dans `content/a-convertir`", ""]
+            for item in items:
+                mine = [r for r in rows if Path(r["path"]).stem.split(".")[0] == item["stem"]]
+                ok = [r for r in mine if r in published]
+                if ok:
+                    lines.append(f"- ✅ {item['file']} → « {ok[0]['title']} », niveau {ok[0]['level']}"
+                                 + (f", {round(ok[0].get('rhythm', 0) * 100)} % de mesures justes" if ok[0]["origin"] == "omr" else ""))
+                elif mine:
+                    lines.append(f"- ⚠️ {item['file']} : écarté ({', '.join(mine[0]['problems']) or 'déjà au catalogue'})")
+                else:
+                    lines.append(f"- ❌ {item['file']} : non reconnu (scan illisible, ou pas de partie de flûte)")
+            lines += ["", "Les fichiers traités sont retirés du dossier par cette pull request. Licence à vérifier "
+                      "sur la page IMSLP de chaque œuvre (domaine public ou Creative Commons)."]
     review = [r for r in rows if r["needsReview"]]
     if review:
         lines += ["", f"<details><summary>{len(review)} partition(s) écartée(s)</summary>", ""]
@@ -483,9 +568,13 @@ def main() -> None:
     pub.add_argument("--max-level", type=int, default=5); pub.add_argument("--per-level", type=int, default=0)
     pub.add_argument("--include-review", action="store_true", help="publie aussi les OMR non relues (déconseillé)")
     sub.add_parser("catalog")
+    ib = sub.add_parser("inbox", help="prépare les fichiers déposés dans content/a-convertir")
+    ib.add_argument("--max-pages", type=int, default=12)
+    sub.add_parser("inbox-clean", help="retire de content/a-convertir les fichiers traités")
     args = p.parse_args()
     {"discover": cmd_discover, "fetch": cmd_fetch, "omr": cmd_omr, "analyse": cmd_analyse,
-     "publish": cmd_publish, "catalog": cmd_catalog}[args.cmd](args)
+     "publish": cmd_publish, "catalog": cmd_catalog,
+     "inbox": cmd_inbox, "inbox-clean": cmd_inbox_clean}[args.cmd](args)
 
 
 if __name__ == "__main__":
