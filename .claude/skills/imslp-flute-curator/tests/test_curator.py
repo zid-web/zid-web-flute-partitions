@@ -13,7 +13,7 @@ from curate import cmd_publish, extract_flute_part  # noqa: E402
 from difficulty import analyse  # noqa: E402
 import curate  # noqa: E402
 from difficulty import read_root  # noqa: E402
-from imslp import Imslp, absolute_url, check_content, is_public_domain, parse_work  # noqa: E402
+from imslp import Imslp, absolute_url, check_content, decode_body, is_public_domain, parse_work  # noqa: E402
 
 ROOT = Path(__file__).parents[4]
 
@@ -106,6 +106,44 @@ class CuratorTest(unittest.TestCase):
             curate.set_titles(broken, "Menuet", "Christian Petzold")
             a = analyse(broken)
             self.assertEqual((a.title, a.composer), ("Menuet", "Christian Petzold"))
+
+    def test_gzip_and_bot_check(self):
+        import gzip as gz
+
+        page = b"<!DOCTYPE html><html><head><title>IMSLP - Bot Check</title></head></html>"
+        body = decode_body(gz.compress(page), "gzip")
+        self.assertEqual(body, page)
+        self.assertEqual(decode_body(gz.compress(b"%PDF-1.4")), b"%PDF-1.4")  # sans en-tête, par les octets
+        self.assertIn("Bot Check", check_content("a.pdf", body))
+
+    def test_inbox(self):
+        from pypdf import PdfWriter
+
+        sample = ROOT / "public/scores/au-clair-de-la-lune.musicxml"
+        self.assertEqual(curate.title_from_filename("Telemann - Fantaisie n°1"), ("Fantaisie n°1", "Telemann"))
+        self.assertEqual(curate.title_from_filename("Syrinx"), ("Syrinx", ""))
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                inbox = Path("content/a-convertir")
+                inbox.mkdir(parents=True)
+                (inbox / "README.md").write_text("aide")
+                shutil.copy(sample, inbox / "Traditionnel - Au clair.musicxml")
+                writer = PdfWriter()
+                for _ in range(15):
+                    writer.add_blank_page(width=595, height=842)
+                with (inbox / "Recueil.pdf").open("wb") as fh:
+                    writer.write(fh)
+                Path("skill-work").mkdir()
+                curate.cmd_inbox(argparse.Namespace(max_pages=12))
+                self.assertEqual(curate.pdf_page_count(Path("skill-work/raw/recueil.pdf")), 12)
+                manifest = [json.loads(l) for l in Path("skill-work/fetched.jsonl").read_text().splitlines()]
+                self.assertEqual({m["work"] for m in manifest}, {"Au clair (Traditionnel)", "Recueil"})
+                curate.cmd_inbox_clean(None)
+                self.assertEqual(sorted(p.name for p in inbox.iterdir()), ["README.md"])
+            finally:
+                os.chdir(cwd)
 
     def test_check_content(self):
         html = b"\n  <!DOCTYPE html><html><head><title>IMSLP - Please wait</title></head></html>"

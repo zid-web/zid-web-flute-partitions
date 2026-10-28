@@ -45,6 +45,14 @@ Prérequis (une fois) :
 
 En local, même pipeline : voir [le skill de curation](.claude/skills/imslp-flute-curator/SKILL.md).
 
+### 1 bis. Dépôt de PDF : dossier `content/a-convertir/` (GitHub Actions)
+
+IMSLP bloque les téléchargements automatiques. Téléchargez les PDF voulus depuis votre navigateur, puis
+déposez-les dans [`content/a-convertir/`](content/a-convertir/README.md) sur github.com
+(*Add file → Upload files*). Le robot « Conversion des partitions déposées » les convertit (Audiveris),
+calcule leur niveau et ouvre une pull request en 5 à 15 minutes ; à la fusion, ils arrivent dans la
+bibliothèque de tous.
+
 ### 2. Partitions personnelles : bouton « 📥 Importer une partition » (dans l'application)
 
 L'élève ou le professeur télécharge un fichier **MusicXML** (`.mxl`, `.musicxml`) sur IMSLP ou ailleurs, puis

@@ -1,0 +1,22 @@
+name: Installer Audiveris
+description: Installe le paquet Ubuntu de la dernière version d'Audiveris (reconnaissance optique de partitions) et xvfb.
+inputs:
+  token:
+    description: Jeton GitHub pour télécharger la release
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
+          | grep -E 'ubuntu24.*\.deb$' | head -1)
+        [ -n "$asset" ] || asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
+          | grep -E 'ubuntu.*x86_64.*\.deb$|\.deb$' | head -1)
+        echo "Paquet : $asset"
+        gh release download --repo Audiveris/audiveris --pattern "$asset" --dir "$RUNNER_TEMP"
+        sudo apt-get update -q
+        sudo apt-get install -y -q xvfb "$RUNNER_TEMP/$asset"
+        ls /opt/audiveris/bin 2>/dev/null || dpkg -L "$(dpkg-deb -f "$RUNNER_TEMP/$asset" Package)" | grep -i 'bin/'

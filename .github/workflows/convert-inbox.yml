@@ -1,0 +1,71 @@
+# Conversion des partitions déposées à la main dans content/a-convertir/ (PDF ou MusicXML
+# téléchargés sur IMSLP depuis un navigateur). Se lance tout seul à chaque dépôt ; ouvre une
+# pull request avec les morceaux reconnus, à écouter dans l'aperçu Vercel avant de fusionner.
+name: Conversion des partitions déposées
+on:
+  push:
+    branches: [main]
+    paths: ["content/a-convertir/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: convert-inbox
+  cancel-in-progress: false
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CURATOR: .claude/skills/imslp-flute-curator/scripts/curate.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pypdf==5.9.0
+      - name: Fichiers déposés ?
+        id: inbox
+        run: |
+          n=$(find content/a-convertir -maxdepth 1 -type f \( -iname '*.pdf' -o -iname '*.mxl' -o -iname '*.musicxml' -o -iname '*.xml' \) | wc -l)
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          echo "$n fichier(s) à convertir"
+      - name: Préparation
+        if: steps.inbox.outputs.count != '0'
+        run: python3 -u "$CURATOR" inbox
+      - name: Installation d'Audiveris
+        if: steps.inbox.outputs.count != '0'
+        uses: ./.github/actions/setup-audiveris
+        with:
+          token: ${{ github.token }}
+      - name: Reconnaissance des PDF (OMR)
+        if: steps.inbox.outputs.count != '0'
+        run: xvfb-run -a python3 -u "$CURATOR" omr
+      - name: Analyse (partie de flûte, difficulté, niveau)
+        if: steps.inbox.outputs.count != '0'
+        run: python3 -u "$CURATOR" analyse
+      - name: Ajout au catalogue
+        if: steps.inbox.outputs.count != '0'
+        run: |
+          python3 -u "$CURATOR" publish --per-level 0
+          python3 -u "$CURATOR" inbox-clean
+      - name: Pull request à valider
+        if: steps.inbox.outputs.count != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: conversion/a-convertir
+          delete-branch: true
+          add-paths: |
+            public/scores/**
+            content/a-convertir/**
+          commit-message: "Catalogue : partitions déposées converties"
+          title: "Catalogue : partitions déposées converties"
+          body-path: skill-work/summary.md
+          labels: catalogue
+      - name: Résumé
+        if: always()
+        run: cat skill-work/summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true

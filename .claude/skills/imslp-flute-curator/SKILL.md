@@ -71,6 +71,23 @@ MediaWiki d'IMSLP (`action=login` en deux temps) ; en cas d'échec, la collecte 
 `.github/workflows/curate.yml` (« Curation IMSLP », manuel ou mensuel) enchaîne discover → fetch → analyse →
 publish et ouvre une pull request `curation/imslp` à valider. Secrets : `IMSLP_USERNAME`, `IMSLP_PASSWORD`.
 
+## Dépôt manuel : `content/a-convertir/`
+
+IMSLP **bloque les téléchargements automatiques** (page « IMSLP - Bot Check », 6ᵉ passage du robot) :
+ne pas chercher à la contourner. Les PDF ou MusicXML téléchargés par un humain dans son navigateur se
+déposent dans `content/a-convertir/` (nom conseillé `Compositeur - Titre.pdf`). Le workflow
+`.github/workflows/convert-inbox.yml` se lance à chaque dépôt sur `main` : `inbox` → `omr` → `analyse` →
+`publish --per-level 0` → `inbox-clean`, puis pull request `conversion/a-convertir` avec un compte rendu
+par fichier (✅ retenu, ⚠️ écarté, ❌ non reconnu). Au-delà de 12 pages, seules les premières sont converties.
+
+```bash
+python3 .claude/skills/imslp-flute-curator/scripts/curate.py inbox
+python3 .claude/skills/imslp-flute-curator/scripts/curate.py omr
+python3 .claude/skills/imslp-flute-curator/scripts/curate.py analyse
+python3 .claude/skills/imslp-flute-curator/scripts/curate.py publish --per-level 0
+python3 .claude/skills/imslp-flute-curator/scripts/curate.py inbox-clean
+```
+
 ## Comment la difficulté est calculée (`scripts/difficulty.py`)
 
 Indicateurs extraits de la partie de flûte, normalisés entre 0 et 1, puis pondérés :

@@ -63,19 +63,9 @@ jobs:
         run: echo "count=$(ls skill-work/raw/*.pdf 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
       - name: Installation d'Audiveris (reconnaissance optique)
         if: steps.pdfs.outputs.count != '0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Paquet Ubuntu de la dernière version publiée d'Audiveris (Java inclus).
-          asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
-            | grep -E 'ubuntu24.*\.deb$' | head -1)
-          [ -n "$asset" ] || asset=$(gh release view --repo Audiveris/audiveris --json assets -q '.assets[].name' \
-            | grep -E 'ubuntu.*x86_64.*\.deb$|\.deb$' | head -1)
-          echo "Paquet : $asset"
-          gh release download --repo Audiveris/audiveris --pattern "$asset" --dir "$RUNNER_TEMP"
-          sudo apt-get update -q
-          sudo apt-get install -y -q xvfb "$RUNNER_TEMP/$asset"
-          ls /opt/audiveris/bin || dpkg -L "$(dpkg-deb -f "$RUNNER_TEMP/$asset" Package)" | grep -i 'bin/'
+        uses: ./.github/actions/setup-audiveris
+        with:
+          token: ${{ github.token }}
       - name: Reconnaissance des PDF (OMR)
         if: steps.pdfs.outputs.count != '0'
         run: xvfb-run -a python3 -u "$CURATOR" omr
