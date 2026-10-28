@@ -36,6 +36,8 @@ SEEN = Path("content/imslp-seen.json")
 INBOX = Path("content/a-convertir")
 INBOX_EXTS = (".pdf", ".mxl", ".musicxml", ".xml")
 FLUTE = re.compile(r"\b(flute|flûte|flauto|flöte|fl\.)", re.I)
+# Accompagnement : jamais pris pour la flûte quand les parties n'ont pas de nom d'instrument (OMR).
+ACCOMPANIMENT = re.compile(r"piano|keyboard|clavier|harpsi|cembal|organ|orgue|guitar|guitare|harp|basso|continuo", re.I)
 DEFAULT_CATEGORIES = ["For flute", "For flute, piano", "For 2 flutes", "For flute, continuo"]
 
 
@@ -257,10 +259,18 @@ def cmd_inbox(args) -> None:
 
 
 def cmd_inbox_clean(_args) -> None:
-    """Retire du dossier de dépôt les fichiers traités (la pull request les supprime)."""
+    """Retire du dossier de dépôt les fichiers convertis (la pull request les supprime) ; les autres
+    vont dans content/a-convertir/non-reconnus/ pour ne pas être perdus ni retraités à chaque dépôt."""
     done = WORK / "inbox.json"
     for item in json.loads(done.read_text(encoding="utf-8")) if done.exists() else []:
-        (INBOX / item["file"]).unlink(missing_ok=True)
+        src = INBOX / item["file"]
+        if not src.exists():
+            continue
+        if item.get("status") == "ok":
+            src.unlink()
+        else:
+            (INBOX / "non-reconnus").mkdir(exist_ok=True)
+            src.replace(INBOX / "non-reconnus" / item["file"])
 
 
 # --- omr / conversions -------------------------------------------------------
@@ -268,6 +278,68 @@ def find_audiveris(explicit: str | None) -> str | None:
     candidates = [explicit, shutil.which("audiveris"), shutil.which("Audiveris")]
     candidates += sorted(str(p) for p in Path("/opt").glob("*/bin/[Aa]udiveris*"))
     return next((c for c in candidates if c and Path(c).exists()), None)
+
+
+def run_audiveris(exe: str, inputs: list[Path], out: Path, timeout: int) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run([exe, "-batch", "-export", "-output", str(out), "--", *map(str, inputs)],
+                       check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"  ! délai dépassé ({timeout} s)", flush=True)
+
+
+def split_pdf(pdf: Path, dest: Path) -> list[Path]:
+    """Une page par fichier (p01.pdf, p02.pdf…). Liste vide sans pypdf."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        return []
+    dest.mkdir(parents=True, exist_ok=True)
+    pages = []
+    for i, page in enumerate(PdfReader(pdf).pages, 1):
+        writer = PdfWriter()
+        writer.add_page(page)
+        target = dest / f"p{i:02d}.pdf"
+        with target.open("wb") as fh:
+            writer.write(fh)
+        pages.append(target)
+    return pages
+
+
+def merge_pages(pages: list[Path], dest: Path) -> int:
+    """Met bout à bout la partie de flûte de chaque page reconnue. Renvoie le nombre de pages gardées."""
+    merged = None
+    kept = 0
+    for page in pages:
+        try:
+            root = read_root(page)
+        except Exception:  # noqa: BLE001 — page illisible : on l'ignore
+            continue
+        pid = pick_flute_part(root, omr=True)
+        part = next((p for p in root.findall("part") if p.get("id") == pid), None)
+        if part is None or part.find(".//note/pitch") is None:
+            continue  # page de titre, préface, page sans flûte
+        kept += 1
+        if merged is None:
+            merged = copy.deepcopy(root)
+            for p in merged.findall("part"):
+                if p.get("id") != pid:
+                    merged.remove(p)
+            pl = merged.find("part-list")
+            for el in list(pl if pl is not None else []):
+                if el.tag != "score-part" or el.get("id") != pid:
+                    pl.remove(el)
+            target = merged.find("part")
+        else:
+            for measure in part.findall("measure"):
+                target.append(copy.deepcopy(measure))
+    if merged is None:
+        return 0
+    for i, measure in enumerate(target.findall("measure"), 1):
+        measure.set("number", str(i))
+    dest.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(merged, encoding="utf-8"))
+    return kept
 
 
 def cmd_omr(args) -> None:
@@ -278,12 +350,21 @@ def cmd_omr(args) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for pdf in sorted((WORK / "raw").glob("*.pdf")):
         print(f"OMR {pdf.name}…", flush=True)
-        try:
-            subprocess.run([exe, "-batch", "-export", "-output", str(out), "--", str(pdf)],
-                           check=False, timeout=args.timeout)
-        except subprocess.TimeoutExpired:
-            print(f"  ! délai dépassé ({args.timeout} s) : {pdf.name}", flush=True)
-    found = sorted(p.name for p in out.glob("**/*.mxl"))
+        run_audiveris(exe, [pdf], out, args.timeout)
+        if any(out.glob(f"{pdf.stem}*.mxl")):
+            continue
+        # Une seule page illisible (titre, scan abîmé) fait échouer l'export de tout le recueil
+        # (« Error in export ») : on reconnaît alors page par page et on garde les pages réussies.
+        pages = split_pdf(pdf, WORK / "omr-pages" / pdf.stem)
+        if len(pages) < 2:
+            continue
+        print(f"  export du recueil impossible : reconnaissance page par page ({len(pages)} pages)…", flush=True)
+        page_out = WORK / "omr-pages" / pdf.stem / "mxl"
+        run_audiveris(exe, pages, page_out, args.timeout)
+        found = sorted(page_out.glob("p*.mxl"))
+        kept = merge_pages(found, out / f"{pdf.stem}.mxl")
+        print(f"  {len(found)} page(s) reconnue(s) sur {len(pages)}, {kept} gardée(s) avec de la flûte", flush=True)
+    found = sorted(p.name for p in out.glob("*.mxl"))
     print(f"{len(found)} partition(s) reconnue(s) : {', '.join(found) or '—'}")
 
 
@@ -299,18 +380,32 @@ def convert_midi(args) -> None:
 
 
 # --- analyse ------------------------------------------------------------------
-def extract_flute_part(src: Path, dest: Path) -> bool:
-    """Écrit une partition à une seule partie (la flûte). False si aucune flûte trouvée."""
-    root = read_root(src)
+def pick_flute_part(root: ET.Element, omr: bool = False) -> str | None:
+    """Identifiant de la partie de flûte, ou None. Audiveris ne connaît pas les instruments (il nomme
+    les portées « Voice », « Piano »…) : pour une OMR, on prend la première partie à une seule portée
+    qui n'est pas un accompagnement — la flûte (ou la 1ʳᵉ flûte d'un duo) est écrite en haut."""
     parts = root.findall("part")
     names = {sp.get("id"): (sp.findtext("part-name") or "") + " " + (sp.findtext("score-instrument/instrument-name") or "")
              for sp in root.iter("score-part")}
     flute_ids = [pid for pid, n in names.items() if FLUTE.search(n)]
-    if not flute_ids and len(parts) == 1:
-        flute_ids = [parts[0].get("id")]
-    if not flute_ids:
+    if flute_ids:
+        return flute_ids[0]
+    if len(parts) == 1:
+        return parts[0].get("id")
+    if omr:
+        for part in parts:
+            staves = {s.text for s in part.iter("staves")}
+            if not ACCOMPANIMENT.search(names.get(part.get("id"), "")) and staves <= {"1"}:
+                return part.get("id")
+    return None
+
+
+def extract_flute_part(src: Path, dest: Path, omr: bool = False) -> bool:
+    """Écrit une partition à une seule partie (la flûte). False si aucune flûte trouvée."""
+    root = read_root(src)
+    keep = pick_flute_part(root, omr)
+    if not keep:
         return False
-    keep = flute_ids[0]
     new = copy.deepcopy(root)
     for p in new.findall("part"):
         if p.get("id") != keep:
@@ -407,12 +502,12 @@ def cmd_analyse(args) -> None:
     flutes.mkdir(parents=True, exist_ok=True)
     results = []
     sources = [(p, "native") for p in (WORK / "raw").glob("*") if p.suffix.lower() in (".mxl", ".xml", ".musicxml")]
-    sources += [(p, "omr") for p in (WORK / "omr").glob("**/*.mxl")]
+    sources += [(p, "omr") for p in (WORK / "omr").glob("*.mxl")]
     for src, origin in sorted(sources):
         dest = flutes / f"{src.stem}.musicxml"
         m = meta.get(src.stem.split(".")[0], {})
         try:
-            if not extract_flute_part(src, dest):
+            if not extract_flute_part(src, dest, omr=origin == "omr"):
                 print(f"  · pas de partie de flûte : {src.name}")
                 continue
             if m.get("work"):
@@ -511,6 +606,7 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
             for item in items:
                 mine = [r for r in rows if Path(r["path"]).stem.split(".")[0] == item["stem"]]
                 ok = [r for r in mine if r in published]
+                item["status"] = "ok" if ok else "rejected" if mine else "failed"
                 if ok:
                     lines.append(f"- ✅ {item['file']} → « {ok[0]['title']} », niveau {ok[0]['level']}"
                                  + (f", {round(ok[0].get('rhythm', 0) * 100)} % de mesures justes" if ok[0]["origin"] == "omr" else ""))
@@ -518,8 +614,10 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
                     lines.append(f"- ⚠️ {item['file']} : écarté ({', '.join(mine[0]['problems']) or 'déjà au catalogue'})")
                 else:
                     lines.append(f"- ❌ {item['file']} : non reconnu (scan illisible, ou pas de partie de flûte)")
-            lines += ["", "Les fichiers traités sont retirés du dossier par cette pull request. Licence à vérifier "
-                      "sur la page IMSLP de chaque œuvre (domaine public ou Creative Commons)."]
+            inbox.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+            lines += ["", "Les fichiers convertis sont retirés du dossier par cette pull request ; les autres sont rangés "
+                      "dans `content/a-convertir/non-reconnus/` (à corriger dans Audiveris ou MuseScore puis à redéposer "
+                      "en .mxl). Licence à vérifier sur la page IMSLP de chaque œuvre (domaine public ou Creative Commons)."]
     review = [r for r in rows if r["needsReview"]]
     if review:
         lines += ["", f"<details><summary>{len(review)} partition(s) écartée(s)</summary>", ""]

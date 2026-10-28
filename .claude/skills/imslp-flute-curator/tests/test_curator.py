@@ -61,6 +61,26 @@ class CuratorTest(unittest.TestCase):
             self.assertIn("Flute", text)
             self.assertNotIn("Piano", text)
 
+    def test_omr_part_names_and_page_merge(self):
+        # Audiveris nomme les portées « Voice » / « Piano » : la flûte est la partie à une portée.
+        omr = DUET.replace("<part-name>Flute</part-name>", "<part-name>Voice</part-name>")
+        omr = omr.replace('<part id="P2"><measure number="1">', '<part id="P2"><measure number="1"><attributes><staves>2</staves></attributes>')
+        with tempfile.TemporaryDirectory() as d:
+            src, dest = Path(d, "p01.xml"), Path(d, "flute.musicxml")
+            src.write_text(omr)
+            self.assertFalse(extract_flute_part(src, dest))
+            self.assertTrue(extract_flute_part(src, dest, omr=True))
+            self.assertNotIn("Piano", dest.read_text())
+            title = Path(d, "p00.xml")
+            title.write_text(omr.replace("<pitch><step>A</step><octave>4</octave></pitch>", "<rest/>"))
+            Path(d, "p02.xml").write_text(omr.replace("<step>A</step>", "<step>B</step>"))
+            merged = Path(d, "livre.musicxml")
+            self.assertEqual(curate.merge_pages([title, src, Path(d, "p02.xml"), Path(d, "absent.mxl")], merged), 2)
+            root = read_root(merged)
+            self.assertEqual(len(root.findall("part")), 1)
+            self.assertEqual([m.get("number") for m in root.iter("measure")], ["1", "2"])
+            self.assertEqual([s.text for s in root.iter("step")], ["A", "B"])
+
     def test_levels_are_ordered(self):
         easy = analyse(ROOT / "public/scores/au-clair-de-la-lune.musicxml")
         harder = analyse(ROOT / "public/scores/menuet-en-sol.musicxml")
@@ -140,8 +160,13 @@ class CuratorTest(unittest.TestCase):
                 self.assertEqual(curate.pdf_page_count(Path("skill-work/raw/recueil.pdf")), 12)
                 manifest = [json.loads(l) for l in Path("skill-work/fetched.jsonl").read_text().splitlines()]
                 self.assertEqual({m["work"] for m in manifest}, {"Au clair (Traditionnel)", "Recueil"})
+                items = json.loads(Path("skill-work/inbox.json").read_text())
+                for item in items:
+                    item["status"] = "ok" if item["file"].endswith(".musicxml") else "failed"
+                Path("skill-work/inbox.json").write_text(json.dumps(items))
                 curate.cmd_inbox_clean(None)
-                self.assertEqual(sorted(p.name for p in inbox.iterdir()), ["README.md"])
+                self.assertEqual(sorted(p.name for p in inbox.iterdir()), ["README.md", "non-reconnus"])
+                self.assertTrue((inbox / "non-reconnus" / "Recueil.pdf").exists())
             finally:
                 os.chdir(cwd)
 
