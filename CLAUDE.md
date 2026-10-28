@@ -9,7 +9,8 @@ Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français 
 - Partitions : uniquement via le skill `imslp-flute-curator` ou `scripts/make_samples.py` ; `public/scores/catalog.json` est **généré** (`curate.py catalog`), la CI vérifie qu'il est à jour.
 - Jamais d'identifiants IMSLP dans le dépôt : variables d'environnement `IMSLP_USERNAME` / `IMSLP_PASSWORD`.
 - Ne garder que des partitions domaine public / CC (pas de NonCommercial sans accord explicite).
-- Hors ligne obligatoire : pas d'appel réseau au runtime, pas de police ni de script externes.
+- Hors ligne obligatoire : aucune fonction ne doit **dépendre** du réseau, pas de police ni de script externes. Seules exceptions, facultatives : la recherche de mise à jour (`src/lib/appUpdate.ts`, service worker) et, dans les applications natives, la synchronisation du catalogue depuis Vercel (`src/lib/contentSync.ts`).
+- Mises à jour : jamais d'installation pendant un morceau (`setBusy`), uniquement depuis la bibliothèque.
 - Difficulté : `difficulty.py` (skill) et `src/lib/difficulty.ts` (import dans l'app) doivent rester identiques ; le test d'import le vérifie sur `catalog.json`.
 - Partitions importées : uniquement sur l'appareil (`src/lib/userScores.ts`, IndexedDB), jamais envoyées sur un serveur.
 - Pas de connexion directe de l'application à IMSLP : le catalogue passe par le workflow « Curation IMSLP » et une pull request validée.
