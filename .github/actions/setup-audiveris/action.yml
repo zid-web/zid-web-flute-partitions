@@ -18,5 +18,11 @@ runs:
         echo "Paquet : $asset"
         gh release download --repo Audiveris/audiveris --pattern "$asset" --dir "$RUNNER_TEMP"
         sudo apt-get update -q
-        sudo apt-get install -y -q xvfb "$RUNNER_TEMP/$asset"
-        ls /opt/audiveris/bin 2>/dev/null || dpkg -L "$(dpkg-deb -f "$RUNNER_TEMP/$asset" Package)" | grep -i 'bin/'
+        sudo apt-get install -y -q xvfb
+        # On extrait les fichiers sans lancer les scripts d'installation du paquet : son script
+        # post-installation échoue sur un serveur (xdg-desktop-menu : pas de menu « Applications »).
+        sudo dpkg-deb -x "$RUNNER_TEMP/$asset" /
+        bin=$(ls /opt/*/bin/[Aa]udiveris* 2>/dev/null | head -1)
+        [ -n "$bin" ] || { echo "Audiveris introuvable après extraction" >&2; dpkg-deb -c "$RUNNER_TEMP/$asset" | grep -i bin/; exit 1; }
+        echo "Audiveris : $bin"
+        "$bin" -help >/dev/null 2>&1 || xvfb-run -a "$bin" -help | head -5 || true
