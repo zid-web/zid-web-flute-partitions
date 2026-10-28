@@ -13,6 +13,15 @@ validez (*Commit changes*). Le robot « Conversion des partitions déposées » 
 Écoutez chaque morceau dans l'aperçu Vercel de la pull request, puis fusionnez : les morceaux arrivent
 dans la bibliothèque de tous les utilisateurs, et les fichiers traités sont retirés de ce dossier.
 
+**Droits d'auteur — important**
+
+Ce dépôt et l'application sont **publics** : ne déposez que des partitions **libres de droits**, c'est-à-dire
+du **domaine public** ou sous licence **Creative Commons** (sans « NonCommercial »), par exemple les fichiers
+d'IMSLP marqués *Public Domain*. **Jamais** d'édition commerciale (Novello, Bärenreiter, Leduc, Hal Leonard…),
+de méthode récente ou de fichier venant d'un site de téléchargement non autorisé : ce serait les rediffuser
+illégalement à tous les utilisateurs. Pour vos propres partitions achetées, utilisez « 📥 Importer une
+partition » dans l'application : elles restent sur votre appareil.
+
 **Conseils**
 
 - Nommez le fichier `Compositeur - Titre.pdf` (ex. `Telemann - Fantaisie n°1.pdf`) : titre et
