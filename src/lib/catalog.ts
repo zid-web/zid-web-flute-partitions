@@ -1,3 +1,4 @@
+import { syncedCatalog, syncedScoreXml } from "./contentSync";
 import { getUserScoreXml } from "./userScores";
 
 /** Une entrée du catalogue généré par le skill `imslp-flute-curator`. */
@@ -33,14 +34,23 @@ export const LEVEL_LABELS: Record<CatalogEntry["level"], string> = {
 /** Contenu MusicXML d'un morceau : fichier publié, ou partition importée sur l'appareil. */
 export async function loadScoreXml(entry: CatalogEntry): Promise<string> {
   if (entry.origin === "import") return getUserScoreXml(entry.id);
+  const synced = await syncedScoreXml(entry.id);
+  if (synced) return synced;
   const res = await fetch(`${import.meta.env.BASE_URL}scores/${entry.file}`);
   if (!res.ok) throw new Error(`Partition introuvable (${res.status})`);
   return res.text();
 }
 
-export async function loadCatalog(): Promise<CatalogEntry[]> {
+/** Catalogue embarqué dans l'application (celui du déploiement ou de l'installeur). */
+export async function loadBundledCatalog(): Promise<CatalogEntry[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}scores/catalog.json`);
   if (!res.ok) throw new Error(`Catalogue introuvable (${res.status})`);
   const data = (await res.json()) as { scores: CatalogEntry[] };
   return data.scores;
+}
+
+/** Catalogue à afficher : celui synchronisé depuis Vercel (applications natives) s'il existe, sinon l'embarqué. */
+export async function loadCatalog(): Promise<{ catalog: CatalogEntry[]; bundled: CatalogEntry[] }> {
+  const bundled = await loadBundledCatalog();
+  return { catalog: (await syncedCatalog()) ?? bundled, bundled };
 }

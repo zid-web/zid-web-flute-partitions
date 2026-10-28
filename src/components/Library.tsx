@@ -123,7 +123,7 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
       </ul>
       <footer className="credits">
         Partitions du domaine public (IMSLP et répertoire traditionnel). Fonctionne hors ligne. Les partitions
-        importées restent sur cet appareil.
+        importées restent sur cet appareil. Version {__APP_VERSION__}, mise à jour automatique.
       </footer>
     </main>
   );

@@ -53,6 +53,16 @@ les mêmes règles que le skill, et enregistre la partition **sur l'appareil uni
 
 Mélodies traditionnelles / exercices du catalogue : `content/originals/*.json` → `python3 scripts/make_samples.py content/originals/*.json`.
 
+## Mises à jour automatiques
+
+- **Web et application installée depuis le navigateur (PWA)** : chaque modification de `main` est publiée par
+  Vercel. L'application cherche une nouvelle version au démarrage, toutes les minutes et au retour au premier
+  plan, et l'installe d'elle-même depuis la bibliothèque ; pendant un morceau, elle attend la fin (annonce
+  « Nouvelle version prête »). La version (commit) s'affiche en bas de la bibliothèque.
+- **Applications Windows / macOS / Android / iOS** : les **nouveaux morceaux** arrivent sans réinstaller
+  (catalogue synchronisé depuis Vercel quand l'appareil est en ligne, puis jouables hors ligne). Les
+  changements de **code** demandent une nouvelle version de l'installeur (tag `vX.Y.Z`).
+
 ## Déployer le web sur Vercel
 
 Importer le dépôt dans Vercel : `vercel.json` règle tout (Vite, sortie `dist/`). Aucune variable d'environnement.
