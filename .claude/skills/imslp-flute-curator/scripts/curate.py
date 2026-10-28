@@ -224,6 +224,7 @@ def inbox_files() -> list[Path]:
 def title_from_filename(stem: str) -> tuple[str, str]:
     """« Telemann - Fantaisie n°1 » → (« Fantaisie n°1 », « Telemann ») ; sinon (nom du fichier, "")."""
     stem = re.sub(r"[_]+", " ", stem).strip()
+    stem = re.sub(r"^(IMSLP\d+-)?PMLP\d+-", "", stem, flags=re.I).strip()  # nom de fichier IMSLP : IMSLP123-PMLP45-titre
     if " - " in stem:
         composer, title = stem.split(" - ", 1)
         return title.strip(), composer.strip()

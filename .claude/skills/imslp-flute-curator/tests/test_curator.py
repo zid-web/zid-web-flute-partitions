@@ -142,6 +142,7 @@ class CuratorTest(unittest.TestCase):
         sample = ROOT / "public/scores/au-clair-de-la-lune.musicxml"
         self.assertEqual(curate.title_from_filename("Telemann - Fantaisie n°1"), ("Fantaisie n°1", "Telemann"))
         self.assertEqual(curate.title_from_filename("Syrinx"), ("Syrinx", ""))
+        self.assertEqual(curate.title_from_filename("IMSLP552022-PMLP890488-L'arc_d'argent"), ("L'arc d'argent", ""))
         with tempfile.TemporaryDirectory() as d:
             cwd = os.getcwd()
             os.chdir(d)
