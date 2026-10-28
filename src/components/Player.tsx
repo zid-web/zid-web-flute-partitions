@@ -134,6 +134,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     micRef.current = null;
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
+    synthRef.current?.stop();
     const score = scoreRef.current;
     score?.resetColors();
     score?.goToStep(0);
@@ -154,7 +155,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     const mic = new MicPitchSource((r) => {
       setHeard(r.midi);
       const follower = followerRef.current;
-      if (follower) handleEvents(follower.push({ midi: r.midi, timeMs: r.timeMs }));
+      if (follower) handleEvents(follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level }));
     });
     try {
       await mic.start();
@@ -174,18 +175,22 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     restart();
     const score = scoreRef.current;
     if (!score) return;
-    synthRef.current ??= new FluteSynth();
-    await synthRef.current.resume();
+    const synth = (synthRef.current ??= new FluteSynth());
+    await synth.resume();
     setMode("listen");
     const secPerBeat = 60 / tempo;
+    // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
+    const t0 = synth.schedule(
+      score.steps.map((s) => ({ midi: s.midi, start: s.startBeat * secPerBeat, duration: s.beats * secPerBeat })),
+    );
+    const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
     score.steps.forEach((s, i) => {
       const t = window.setTimeout(() => {
-        synthRef.current?.play(s.midi, s.beats * secPerBeat);
         if (i > 0) score.color(i - 1, COLORS.hit);
         score.goToStep(i);
         setStep(i);
         setHeard(s.midi);
-      }, s.startBeat * secPerBeat * 1000);
+      }, offsetMs + s.startBeat * secPerBeat * 1000);
       timersRef.current.push(t);
     });
     const last = score.steps.at(-1);
@@ -198,7 +203,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           setHeard(null);
           setMode("idle");
         },
-        (last.startBeat + last.beats) * secPerBeat * 1000 + 300,
+        offsetMs + (last.startBeat + last.beats) * secPerBeat * 1000 + 300,
       );
       timersRef.current.push(end);
     }

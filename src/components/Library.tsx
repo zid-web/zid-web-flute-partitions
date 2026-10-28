@@ -42,6 +42,25 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
         </div>
       </header>
 
+      <details className="help">
+        <summary>❓ Comment ça marche ?</summary>
+        <ol>
+          <li>Choisissez un morceau (filtrez par niveau : ● Découverte → ●●●●● Avancé).</li>
+          <li>
+            <b>🔊 Écouter</b> : l'application joue le morceau, la partition défile. Réglez le tempo avec le curseur.
+          </li>
+          <li>
+            <b>🎤 Jouer avec ma flûte</b> : autorisez le micro, puis jouez. La note attendue est en orange avec son
+            doigté ; elle passe au vert quand elle est juste, une fausse note clignote en rouge.
+          </li>
+          <li>Débutant ? Cochez « Octave libre » : une note jouée à l'octave est acceptée.</li>
+          <li>
+            <b>📥 Importer une partition</b> : un fichier MusicXML (.mxl, .musicxml) téléchargé sur IMSLP ou ailleurs.
+            Il reste sur cet appareil et fonctionne hors ligne.
+          </li>
+        </ol>
+      </details>
+
       <div className="filters">
         <button className={level === 0 ? "chip active" : "chip"} onClick={() => setLevel(0)}>
           Tous

@@ -43,6 +43,35 @@ describe("ScoreFollower", () => {
     expect(f.position).toBe(2);
   });
 
+  it("reconnaît un coup de langue sans silence entre deux notes identiques", () => {
+    const f = new ScoreFollower([67, 67, 67], opts);
+    const note = (from: number) => {
+      // attaque, tenue, puis chute de volume (coup de langue) sans jamais perdre la hauteur
+      for (let t = 0; t <= 450; t += 10) {
+        const level = t < 30 ? 0.05 + t / 200 : t > 380 ? 0.03 : 0.17;
+        f.push({ midi: 67, timeMs: from + t, level });
+      }
+    };
+    note(0);
+    note(460);
+    note(920);
+    expect(f.position).toBe(3);
+  });
+
+  it("la résonance qui s'éteint n'est pas une nouvelle note", () => {
+    const f = new ScoreFollower([67, 67], opts);
+    for (let t = 0; t <= 400; t += 10) f.push({ midi: 67, timeMs: t, level: 0.17 });
+    // réverbération : même hauteur, volume qui décroît sans remonter
+    for (let t = 410; t <= 1500; t += 10) f.push({ midi: 67, timeMs: t, level: 0.17 * Math.exp(-(t - 400) / 150) + 0.002 });
+    expect(f.position).toBe(1);
+  });
+
+  it("une note longue qui faiblit un peu n'est pas comptée deux fois", () => {
+    const f = new ScoreFollower([67, 67], opts);
+    for (let t = 0; t <= 1000; t += 10) f.push({ midi: 67, timeMs: t, level: 0.2 - t * 0.0001 });
+    expect(f.position).toBe(1);
+  });
+
   it("ne compte pas la fin de la note précédente comme fausse note", () => {
     const f = new ScoreFollower([67, 69], opts);
     const ev = play(f, 67, 0, 600);
