@@ -134,6 +134,26 @@
       "tags": [
         "baroque"
       ]
+    },
+    {
+      "id": "inconnu-l-arc-d-argent-lades-neffousbanspno",
+      "title": "L'arc d'argent Lades Neffousbanspno",
+      "composer": "Inconnu",
+      "complexity": 58,
+      "level": 4,
+      "key": "Do majeur",
+      "time": "4/4",
+      "range": {
+        "low": "Sol4",
+        "high": "La6"
+      },
+      "noteCount": 78,
+      "file": "inconnu-l-arc-d-argent-lades-neffousbanspno.musicxml",
+      "source": "Dépôt manuel (content/a-convertir)",
+      "sourceUrl": null,
+      "license": "À vérifier (déposé dans content/a-convertir)",
+      "origin": "omr",
+      "tags": []
     }
   ]
 }
