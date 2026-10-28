@@ -126,11 +126,32 @@ class Imslp:
         if not url:
             raise FileNotFoundError(file_name)
         content = self._get(url)
-        if content[:15].lower().startswith(b"<!doctype html") or content[:5].lower() == b"<html":
-            raise RuntimeError(f"IMSLP a renvoyé une page HTML au lieu du fichier {file_name} (attente non-membre ?)")
+        problem = check_content(file_name, content)
+        if problem:
+            raise RuntimeError(problem)
         with open(dest, "wb") as fh:
             fh.write(content)
         return dest
+
+
+def check_content(file_name: str, content: bytes) -> str | None:
+    """Vérifie que les octets reçus correspondent bien au type annoncé (IMSLP renvoie parfois une page web :
+    attente pour non-membres, avertissement de droits d'auteur…). Renvoie un message d'erreur, ou None."""
+    ext = os.path.splitext(file_name)[1].lower()
+    head = content[:2048].lstrip()
+    if ext == ".pdf":
+        ok = content.startswith(b"%PDF")
+    elif ext == ".mxl":
+        ok = content.startswith(b"PK") or head.startswith((b"<?xml", b"<score-partwise", b"<!DOCTYPE score"))
+    elif ext in (".mid", ".midi"):
+        ok = content.startswith(b"MThd")
+    else:
+        ok = head.startswith((b"<?xml", b"<score-partwise", b"<!DOCTYPE score"))
+    if ok:
+        return None
+    title = re.search(rb"<title>(.*?)</title>", content[:20000], re.I | re.S)
+    what = f"page web « {title.group(1).decode('utf-8', 'replace').strip()[:80]} »" if title else f"contenu inattendu {head[:40]!r}"
+    return f"IMSLP a renvoyé une {what} au lieu du fichier {file_name}"
 
 
 def absolute_url(url: str) -> str:

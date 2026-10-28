@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from curate import cmd_publish, extract_flute_part  # noqa: E402
 from difficulty import analyse  # noqa: E402
 import curate  # noqa: E402
-from imslp import Imslp, absolute_url, is_public_domain, parse_work  # noqa: E402
+from difficulty import read_root  # noqa: E402
+from imslp import Imslp, absolute_url, check_content, is_public_domain, parse_work  # noqa: E402
 
 ROOT = Path(__file__).parents[4]
 
@@ -68,10 +69,20 @@ class CuratorTest(unittest.TestCase):
         self.assertEqual((easy.low, easy.high), ("Ré4", "Si4"))
 
     def test_pdf_helpers(self):
+        from pypdf import PdfWriter
+
         with tempfile.TemporaryDirectory() as d:
             pdf = Path(d, "x.pdf")
-            pdf.write_bytes(b"%PDF-1.4 /Type /Pages /Kids [] /Type /Page /Type/Page /Type /Page /Type /Catalog")
-            self.assertEqual(curate.pdf_page_count(pdf), 3)
+            writer = PdfWriter()
+            for _ in range(9):
+                writer.add_blank_page(width=595, height=842)
+            with pdf.open("wb") as fh:
+                writer.write(fh)
+            self.assertEqual(curate.pdf_page_count(pdf), 9)
+            self.assertTrue(curate.truncate_pdf(pdf, 4))
+            self.assertEqual(curate.pdf_page_count(pdf), 4)
+            Path(d, "abime.pdf").write_bytes(b"%PDF-1.7 tronque")
+            self.assertEqual(curate.pdf_page_count(Path(d, "abime.pdf")), 0)
         work = {"files": [{"name": "a.pdf", "description": "Piano part"},
                           {"name": "b.pdf", "description": "Complete Score"},
                           {"name": "c.pdf", "description": "Preface"}]}
@@ -95,6 +106,21 @@ class CuratorTest(unittest.TestCase):
             curate.set_titles(broken, "Menuet", "Christian Petzold")
             a = analyse(broken)
             self.assertEqual((a.title, a.composer), ("Menuet", "Christian Petzold"))
+
+    def test_check_content(self):
+        html = b"\n  <!DOCTYPE html><html><head><title>IMSLP - Please wait</title></head></html>"
+        self.assertIn("Please wait", check_content("a.mxl", html))
+        self.assertIn("Please wait", check_content("a.pdf", html))
+        self.assertIsNone(check_content("a.pdf", b"%PDF-1.5 ..."))
+        self.assertIsNone(check_content("a.mxl", b"PK\x03\x04..."))
+        self.assertIsNone(check_content("a.mxl", b'<?xml version="1.0"?><score-partwise/>'))
+        self.assertIsNone(check_content("a.mid", b"MThd...."))
+
+    def test_plain_xml_mxl(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "plain.mxl")
+            p.write_text(DUET)
+            self.assertEqual(read_root(p).tag, "score-partwise")
 
     def test_absolute_url(self):
         self.assertEqual(absolute_url("//imslp.org/images/4/4f/X.mxl"), "https://imslp.org/images/4/4f/X.mxl")

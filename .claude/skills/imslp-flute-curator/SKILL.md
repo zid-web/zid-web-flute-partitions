@@ -41,7 +41,10 @@ python3 .claude/skills/imslp-flute-curator/scripts/curate.py discover --limit 30
 # 2. Télécharger les fichiers numériques (MusicXML/MIDI) ; --pdf ajoute les PDF pour l'OMR
 IMSLP_USERNAME=… IMSLP_PASSWORD=… python3 .claude/skills/imslp-flute-curator/scripts/curate.py fetch
 
-#    --pdf : un PDF (partition complète, ≤ --max-pages pages) par œuvre pour flûte seule, --max-pdf au plus
+#    --pdf : un PDF (partition complète) par œuvre pour flûte seule, --max-pdf au plus ; au-delà de
+#    --max-pages pages (recueils d'études), seules les premières pages sont reconnues (« extrait, p. 1–6 »).
+#    Nécessite `pip install pypdf` (pages des PDF récents, découpage). Chaque fichier reçu est vérifié
+#    (%PDF, zip MusicXML…) : une page web d'IMSLP à la place du fichier est signalée avec son titre.
 # 3. OMR des PDF avec Audiveris (titre et compositeur repris d'IMSLP) → skill-work/omr/*.mxl
 python3 .claude/skills/imslp-flute-curator/scripts/curate.py omr
 

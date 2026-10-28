@@ -26,7 +26,7 @@ def midi_name(m: int) -> str:
 
 
 def read_root(path: Path) -> ET.Element:
-    if path.suffix.lower() == ".mxl":
+    if path.suffix.lower() == ".mxl" and zipfile.is_zipfile(path):  # certains « .mxl » sont du XML non compressé
         with zipfile.ZipFile(path) as z:
             container = ET.fromstring(z.read("META-INF/container.xml"))
             rootfile = next(e.get("full-path") for e in container.iter() if e.tag.endswith("rootfile"))

@@ -46,6 +46,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Outils Python (lecture et découpage des PDF)
+        run: pip install pypdf==5.9.0
       - name: Découverte des œuvres
         run: python3 -u "$CURATOR" discover --limit "${{ inputs.limit || '150' }}"
       - name: Téléchargement (MusicXML, et PDF de flûte seule pour l'OMR)

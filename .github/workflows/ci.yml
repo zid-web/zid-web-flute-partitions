@@ -19,6 +19,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: pip install pypdf==5.9.0
       - run: python3 -m unittest discover -s .claude/skills/imslp-flute-curator/tests
       - name: Le catalogue est à jour
         run: |
