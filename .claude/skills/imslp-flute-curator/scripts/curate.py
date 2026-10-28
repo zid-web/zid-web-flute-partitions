@@ -94,9 +94,30 @@ REJECT_HINT = re.compile(r"\bparts?\b(?!.*flute)|piano|cover|title|preface|comme
 
 
 def pdf_page_count(path: Path) -> int:
-    """Nombre de pages d'un PDF, sans dépendance (approximation fiable pour les scans IMSLP)."""
-    data = path.read_bytes()
-    return len(re.findall(rb"/Type\s*/Page(?![a-zA-Z])", data))
+    """Nombre de pages d'un PDF (0 si inconnu). pypdf si installé : les PDF récents rangent leurs pages
+    dans des flux compressés, invisibles pour une simple recherche de texte."""
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(path).pages)
+    except ImportError:
+        return len(re.findall(rb"/Type\s*/Page(?![a-zA-Z])", path.read_bytes()))
+    except Exception:  # noqa: BLE001 — PDF abîmé : on laisse Audiveris essayer
+        return 0
+
+
+def truncate_pdf(path: Path, pages: int) -> bool:
+    """Garde les `pages` premières pages (recueils d'études : on reconnaît un extrait). False sans pypdf."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        return False
+    reader, writer = PdfReader(path), PdfWriter()
+    for page in reader.pages[:pages]:
+        writer.add_page(page)
+    with path.open("wb") as fh:
+        writer.write(fh)
+    return True
 
 
 def pick_pdf(work: dict) -> dict | None:
@@ -142,16 +163,21 @@ def cmd_fetch(args) -> None:
                     print(f"  ! {name}: {exc}", flush=True)
                     failed.add(work["title"])
                     continue
+                excerpt = None
                 if ext == ".pdf":
                     pages = pdf_page_count(dest)
-                    if not 0 < pages <= args.max_pages:
-                        print(f"  ⨯ {pages} pages (> {args.max_pages}) : {name}", flush=True)
-                        dest.unlink()
-                        continue
+                    if pages > args.max_pages:
+                        if not truncate_pdf(dest, args.max_pages):
+                            print(f"  ⨯ {pages} pages (> {args.max_pages}, pypdf absent) : {name}", flush=True)
+                            dest.unlink()
+                            continue
+                        excerpt = f"extrait, p. 1–{args.max_pages} sur {pages}"
+                    print(f"  · PDF de {pages or '?'} page(s){' — ' + excerpt if excerpt else ''}", flush=True)
                     pdf_count += 1
                 fh.write(json.dumps({"path": str(dest), "work": work["title"], "url": work["url"],
                                      "composer": work["composer"], "copyright": f.get("copyright", ""),
-                                     "description": f.get("description", "")}, ensure_ascii=False) + "\n")
+                                     "description": f.get("description", ""), "excerpt": excerpt},
+                                    ensure_ascii=False) + "\n")
                 print(f"  ↓ {dest}", flush=True)
     (WORK / "fetch-failed.json").write_text(json.dumps(sorted(failed), ensure_ascii=False), encoding="utf-8")
     print(f"{pdf_count} PDF à reconnaître ; {len(failed)} œuvre(s) reportée(s) ou en échec (reprises au prochain passage)")
@@ -321,7 +347,8 @@ def cmd_analyse(args) -> None:
                 print(f"  · pas de partie de flûte : {src.name}")
                 continue
             if m.get("work"):
-                set_titles(dest, *imslp_title(m["work"]))
+                title, composer = imslp_title(m["work"])
+                set_titles(dest, f"{title} ({m['excerpt']})" if m.get("excerpt") else title, composer)
             a = analyse(dest)
         except Exception as exc:  # noqa: BLE001
             print(f"  ! {src.name}: {exc}")
