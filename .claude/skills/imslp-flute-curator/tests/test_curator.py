@@ -137,6 +137,7 @@ class CuratorTest(unittest.TestCase):
             return json.dumps({"login": {"result": "Success"}}).encode()
 
         client = Imslp(delay=0)
+        client.login_retry_delay = 0
         client._get = fake_get
         os.environ.update(IMSLP_USERNAME="u", IMSLP_PASSWORD="p")
         try:
@@ -144,6 +145,15 @@ class CuratorTest(unittest.TestCase):
             self.assertEqual(calls[1]["lgtoken"], "abc")
             client._get = lambda url, data=None: b"<html>erreur</html>"
             self.assertIn("anonyme", client.login())  # un échec n'interrompt pas la collecte
+
+            # Échec ponctuel puis réussite, avec cookie de session posé à partir de la réponse.
+            replies = iter([{"result": "NeedToken", "token": "t", "cookieprefix": "imslp_wiki", "sessionid": "s1"},
+                            {"result": "NeedToken", "token": "t"},
+                            {"result": "NeedToken", "token": "t2", "cookieprefix": "imslp_wiki", "sessionid": "s2"},
+                            {"result": "Success"}])
+            client._get = lambda url, data=None: json.dumps({"login": next(replies)}).encode()
+            self.assertEqual(client.login(), "OK (essai 2)")
+            self.assertIn("imslp_wiki_session", {c.name for c in client.jar})
         finally:
             del os.environ["IMSLP_USERNAME"], os.environ["IMSLP_PASSWORD"]
 

@@ -53,12 +53,16 @@ class Imslp:
     def __init__(self, delay: float = 1.0):
         self.delay = delay
         self._last = 0.0
-        jar = http.cookiejar.CookieJar()
+        self.login_retry_delay = 3.0
+        jar = self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         self.opener.addheaders = [("User-Agent", UA)]
         # Cookie d'acceptation de l'avertissement de droits d'auteur d'IMSLP.
-        jar.set_cookie(http.cookiejar.Cookie(0, "imslpdisclaimeraccepted", "yes", None, False, "imslp.org", True, False,
-                                             "/", True, False, None, False, None, None, {}))
+        self._cookie("imslpdisclaimeraccepted", "yes")
+
+    def _cookie(self, name: str, value: str) -> None:
+        self.jar.set_cookie(http.cookiejar.Cookie(0, name, value, None, False, "imslp.org", True, False,
+                                                  "/", True, False, None, False, None, None, {}))
 
     def _get(self, url: str, data: dict | None = None) -> bytes:
         wait = self.delay - (time.monotonic() - self._last)
@@ -82,15 +86,24 @@ class Imslp:
         user, password = os.environ.get("IMSLP_USERNAME"), os.environ.get("IMSLP_PASSWORD")
         if not user or not password:
             return "anonyme (IMSLP_USERNAME / IMSLP_PASSWORD absents)"
-        try:
-            data = {"action": "login", "lgname": user, "lgpassword": password, "format": "json"}
-            res = json.loads(self._get(API, data)).get("login", {})
-            if res.get("result") == "NeedToken":
-                res = json.loads(self._get(API, data | {"lgtoken": res.get("token", "")})).get("login", {})
-        except Exception as exc:  # noqa: BLE001
-            return f"échec ({exc}) — poursuite en anonyme"
-        result = res.get("result", "réponse inattendue")
-        return "OK" if result == "Success" else f"refusée ({result}) — poursuite en anonyme"
+        data = {"action": "login", "lgname": user, "lgpassword": password, "format": "json"}
+        result = "réponse inattendue"
+        for attempt in range(3):  # la connexion d'IMSLP échoue parfois une fois sur deux
+            try:
+                res = json.loads(self._get(API, data)).get("login", {})
+                if res.get("result") == "NeedToken":
+                    # Certains MediaWiki derrière un cache ne renvoient pas le cookie de session :
+                    # on le pose nous-mêmes à partir de la réponse (cookieprefix + sessionid).
+                    if res.get("cookieprefix") and res.get("sessionid"):
+                        self._cookie(f"{res['cookieprefix']}_session", res["sessionid"])
+                    res = json.loads(self._get(API, data | {"lgtoken": res.get("token", "")})).get("login", {})
+                result = res.get("result", "réponse inattendue")
+            except Exception as exc:  # noqa: BLE001
+                result = f"erreur {exc}"
+            if result == "Success":
+                return "OK" if attempt == 0 else f"OK (essai {attempt + 1})"
+            time.sleep(self.login_retry_delay * (attempt + 1))
+        return f"refusée ({result}) — poursuite en anonyme"
 
     def category_members(self, category: str, limit: int = 500):
         """Pages d'œuvres d'une catégorie (ex. « For flute », « For flute, piano »)."""
