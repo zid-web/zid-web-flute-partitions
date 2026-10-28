@@ -23,7 +23,18 @@ export const DEFAULT_FOLLOWER_OPTIONS: FollowerOptions = {
 export interface PitchFrame {
   midi: number | null;
   timeMs: number;
+  /** Volume (RMS) : sert à repérer le coup de langue entre deux notes identiques. */
+  level?: number;
 }
+
+/**
+ * Coup de langue : entre deux notes identiques, le son ne s'arrête pas complètement (souffle,
+ * résonance de la pièce) mais le volume chute nettement. En dessous de cette fraction du volume
+ * de la note tenue, on considère que la note suivante est attaquée.
+ */
+export const REARTICULATION_RATIO = 0.4;
+/** Après la chute, le volume doit remonter (vraie attaque) et pas seulement s'éteindre (résonance). */
+export const REATTACK_RISE = 1.8;
 
 export type FollowerEvent =
   | { type: "hit"; index: number }
@@ -40,6 +51,10 @@ export class ScoreFollower {
    * sa fin n'est pas une fausse note, et si la suivante est identique il faut une nouvelle attaque.
    */
   private sustainMidi: number | null = null;
+  /** Volume maximal de la note tenue (pour repérer le coup de langue). */
+  private sustainPeak = 0;
+  /** Après un coup de langue : volume le plus bas atteint, en attendant que le son remonte. */
+  private dipFloor: number | null = null;
 
   constructor(
     private readonly expected: readonly number[],
@@ -64,6 +79,7 @@ export class ScoreFollower {
     this.wrongSince = null;
     this.wrongReported = false;
     this.sustainMidi = null;
+    this.dipFloor = null;
   }
 
   matches(playedMidi: number, expectedMidi: number): boolean {
@@ -80,6 +96,7 @@ export class ScoreFollower {
 
     if (frame.midi === null) {
       this.sustainMidi = null;
+      this.dipFloor = null;
       this.candidateSince = null;
       this.wrongSince = null;
       this.wrongReported = false;
@@ -87,8 +104,21 @@ export class ScoreFollower {
     }
 
     if (this.sustainMidi !== null) {
-      if (this.matches(frame.midi, this.sustainMidi)) return [];
+      const level = frame.level;
+      if (level !== undefined) this.sustainPeak = Math.max(this.sustainPeak, level);
+      const dipped = level !== undefined && level < this.sustainPeak * REARTICULATION_RATIO;
+      if (!dipped && this.matches(frame.midi, this.sustainMidi)) return [];
       this.sustainMidi = null;
+      this.dipFloor = dipped ? (level as number) : null;
+    }
+
+    if (this.dipFloor !== null && frame.level !== undefined) {
+      if (frame.level < this.dipFloor * REATTACK_RISE) {
+        this.dipFloor = Math.min(this.dipFloor, frame.level);
+        this.candidateSince = null;
+        return []; // le son s'éteint encore : pas de nouvelle attaque
+      }
+      this.dipFloor = null;
     }
 
     if (this.matches(frame.midi, target)) {
@@ -101,6 +131,7 @@ export class ScoreFollower {
       this.index += 1;
       this.candidateSince = null;
       this.sustainMidi = target;
+      this.sustainPeak = frame.level ?? 0;
       const events: FollowerEvent[] = [{ type: "hit", index: hitIndex }];
       if (this.done) events.push({ type: "finished" });
       return events;
