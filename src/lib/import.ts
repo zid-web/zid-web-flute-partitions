@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import type { CatalogEntry } from "./catalog";
 import { analyseScore, extractFlutePart, parseMusicXml, scoreWarnings } from "./difficulty";
-import { hasFlutePart, keepParts, pianoPartIds, type ScoreKind } from "./accompaniment";
+import { hasFlutePart, keepParts, otherFluteIds, pianoPartIds, type Partner, type ScoreKind } from "./accompaniment";
 import { copyTempoMarks, hasTempoMarks, partTempoMap } from "./tempo";
 
 export const ACCEPTED_EXTENSIONS = ".mxl,.musicxml,.xml";
@@ -52,6 +52,7 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
   const pianos = pianoPartIds(doc);
   let kind: ScoreKind;
   let accompaniment: string | undefined;
+  let partners: Partner[] = [];
   // Une partition dont toutes les parties sont pour piano (même une seule : « Piano », ou écrite
   // sur deux portées) n'est pas une partition de flûte, sauf si une partie s'appelle flûte.
   const allPiano = pianos.length > 0 && pianos.length === doc.documentElement.querySelectorAll(":scope > part").length;
@@ -59,9 +60,13 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
     const flute = doc.documentElement.querySelector(":scope > part");
     if (flute && !hasTempoMarks(flute)) copyTempoMarks(tempos, flute);
     const keptId = flute?.getAttribute("id") ?? "";
-    const others = pianos.filter((id) => id !== keptId);
-    kind = others.length ? "flute-piano" : "flute";
-    if (others.length) accompaniment = partsOnly(rawXml, others, tempos);
+    // Gardés pour être joués par l'application : le piano, et la 2ᵉ flûte d'un duo
+    // (l'élève joue la 1ʳᵉ flûte, la première partie nommée flûte).
+    const otherPianos = pianos.filter((id) => id !== keptId);
+    const otherFlutes = otherFluteIds(parseMusicXml(rawXml), keptId);
+    partners = [...(otherPianos.length ? ["piano" as const] : []), ...(otherFlutes.length ? ["flute" as const] : [])];
+    kind = otherPianos.length ? "flute-piano" : "flute";
+    if (partners.length) accompaniment = partsOnly(rawXml, [...otherPianos, ...otherFlutes], tempos);
   } else if (pianos.length) {
     kind = "piano";
     keepParts(doc, pianos);
@@ -94,7 +99,13 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
       license: "Fichier personnel",
       origin: "import",
       kind,
-      tags: kind === "flute" ? ["importée"] : ["importée", kind === "piano" ? "piano seul" : "avec piano"],
+      ...(partners.length ? { partners } : {}),
+      tags: [
+        "importée",
+        ...(kind === "piano" ? ["piano seul"] : []),
+        ...(partners.includes("piano") ? ["avec piano"] : []),
+        ...(partners.includes("flute") ? ["duo de flûtes"] : []),
+      ],
     },
   };
 }

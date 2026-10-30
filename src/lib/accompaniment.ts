@@ -46,6 +46,41 @@ export function pianoPartIds(doc: Document): string[] {
     .map((p) => p.getAttribute("id") ?? "");
 }
 
+/** Autres parties de flûte que celle gardée pour l'élève (2ᵉ flûte d'un duo, jouée par l'application). */
+export function otherFluteIds(doc: Document, keptId: string): string[] {
+  const names = partNames(doc.documentElement);
+  return children(doc.documentElement, "part")
+    .map((p) => p.getAttribute("id") ?? "")
+    .filter((id) => id !== keptId && FLUTE.test(names.get(id) ?? ""));
+}
+
+/** Instruments joués par l'application avec l'élève. */
+export type Partner = "piano" | "flute";
+
+/**
+ * Répartit un fichier d'accompagnement : parties de piano (nom à clavier ou deux portées) et
+ * autres flûtes (nommées flûte, ou à une seule portée : 2ᵉ flûte d'un duo reconnu par OMR).
+ */
+export function splitAccompaniment(xml: string): { piano: PianoNote[]; flute: PianoNote[] } {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const names = partNames(doc.documentElement);
+  const pianoIds: string[] = [];
+  const fluteIds: string[] = [];
+  for (const part of children(doc.documentElement, "part")) {
+    const id = part.getAttribute("id") ?? "";
+    (isPianoPart(part, names.get(id) ?? "") ? pianoIds : fluteIds).push(id);
+  }
+  return {
+    piano: pianoIds.length ? pianoNotes(xml, pianoIds) : [],
+    flute: fluteIds.length ? pianoNotes(xml, fluteIds) : [],
+  };
+}
+
+/** Partenaires d'une partition : champ `partners`, ou ancien `kind: "flute-piano"`. */
+export function partnersOf(entry: { partners?: Partner[]; kind?: string }): Partner[] {
+  return entry.partners ?? (entry.kind === "flute-piano" ? ["piano"] : []);
+}
+
 /** Y a-t-il une partie nommée flûte ? */
 export function hasFlutePart(doc: Document): boolean {
   return [...partNames(doc.documentElement).values()].some((name) => FLUTE.test(name));

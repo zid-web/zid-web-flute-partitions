@@ -4,6 +4,7 @@ import { join } from "node:path";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { analyseScore, parseMusicXml } from "../difficulty";
+import { partnersOf, splitAccompaniment } from "../accompaniment";
 import { prepareImport, readScoreBytes } from "../import";
 
 const SCORES = join(__dirname, "../../../public/scores");
@@ -47,6 +48,25 @@ describe("import d'une partition", () => {
     expect(xml).not.toContain("Piano");
     expect(accompaniment).toContain("Piano");
     expect(accompaniment).not.toContain("Flûte");
+  });
+
+  it("duo de flûtes (+ piano) : vous jouez la 1ʳᵉ, l'application garde la 2ᵉ et le piano", () => {
+    const trio = DUET.replace(
+      '<score-part id="P2"><part-name>Flûte</part-name></score-part>',
+      '<score-part id="P2"><part-name>Flûte 1</part-name></score-part><score-part id="P3"><part-name>Flûte 2</part-name></score-part>',
+    ).replace("</score-partwise>", '<part id="P3"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>F</step><octave>4</octave></pitch><duration>4</duration></note></measure></part></score-partwise>');
+    const { entry, xml, accompaniment } = prepareImport(trio, "trio.xml");
+    expect(entry.partners).toEqual(["piano", "flute"]);
+    expect(entry.tags).toContain("duo de flûtes");
+    expect(xml).toContain("Flûte 1");
+    expect(xml).not.toContain("Flûte 2");
+    const split = splitAccompaniment(accompaniment!);
+    expect(split.flute.map((n) => n.midi)).toEqual([65]); // Fa4 de la 2ᵉ flûte
+    expect(split.piano.map((n) => n.midi)).toEqual([48]); // Do3 du piano
+    const duo = prepareImport(trio.replace('<score-part id="P1"><part-name>Piano</part-name></score-part>', "").replace(/<part id="P1">[\s\S]*?<\/part>/, ""), "duo.xml");
+    expect(duo.entry.partners).toEqual(["flute"]);
+    expect(partnersOf(duo.entry)).toEqual(["flute"]);
+    expect(partnersOf({ kind: "flute-piano" })).toEqual(["piano"]); // partitions importées avant les duos
   });
 
   it("sans flûte mais avec un piano : partition pour piano seul", () => {

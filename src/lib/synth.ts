@@ -95,6 +95,20 @@ export class FluteSynth {
     return t0;
   }
 
+  /** Autre voix (2ᵉ flûte) depuis le temps `origin` de la partition (voir FlutePlayer). */
+  scheduleAt(
+    notes: { midi: number; startSec: number; seconds: number }[],
+    t0: number,
+    { origin = 0, until = Infinity, speed = 1 } = {},
+  ): void {
+    for (const n of notes) {
+      if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
+      const at = t0 + (n.startSec - origin) / speed;
+      if (at < this.ctx.currentTime - 0.01) continue;
+      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, false);
+    }
+  }
+
   /** Joue une seule note maintenant (aperçu). */
   play(midi: number, durationSec: number): void {
     this.note(midi, this.ctx.currentTime + 0.02, durationSec, false);

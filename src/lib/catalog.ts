@@ -1,5 +1,5 @@
-import { syncedCatalog, syncedScoreXml } from "./contentSync";
-import { getUserScoreXml } from "./userScores";
+import { syncedAccompanimentXml, syncedCatalog, syncedScoreXml } from "./contentSync";
+import { getUserScoreAccompaniment, getUserScoreXml } from "./userScores";
 
 /** Une entrée du catalogue généré par le skill `imslp-flute-curator`. */
 export interface CatalogEntry {
@@ -23,6 +23,10 @@ export interface CatalogEntry {
   tags?: string[];
   /** Instruments : flûte seule (par défaut), flûte + piano (accompagnement), ou piano seul. */
   kind?: "flute" | "flute-piano" | "piano";
+  /** Joués par l'application avec l'élève : piano et/ou 2ᵉ flûte (duo). */
+  partners?: ("piano" | "flute")[];
+  /** Bibliothèque : fichier des parties d'accompagnement (`<id>.accomp.musicxml`). */
+  accompanimentFile?: string;
   /** Partitions importées seulement : date d'import (ms), pour les ranger par ordre d'import. */
   addedAt?: number;
 }
@@ -43,6 +47,19 @@ export async function loadScoreXml(entry: CatalogEntry): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}scores/${entry.file}`);
   if (!res.ok) throw new Error(`Partition introuvable (${res.status})`);
   return res.text();
+}
+
+/**
+ * Parties jouées par l'application avec l'élève (piano, 2ᵉ flûte), ou null s'il n'y en a pas.
+ * Partition importée : sur l'appareil ; bibliothèque : téléchargée (application native) ou embarquée.
+ */
+export async function loadAccompanimentXml(entry: CatalogEntry): Promise<string | null> {
+  if (entry.origin === "import") return getUserScoreAccompaniment(entry.id);
+  if (!entry.accompanimentFile) return null;
+  const synced = await syncedAccompanimentXml(entry.id);
+  if (synced) return synced;
+  const res = await fetch(`${import.meta.env.BASE_URL}scores/${entry.accompanimentFile}`);
+  return res.ok ? res.text() : null;
 }
 
 /** Catalogue embarqué dans l'application (celui du déploiement ou de l'installeur). */
