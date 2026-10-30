@@ -1,4 +1,5 @@
 import { OpenSheetMusicDisplay, type GraphicalNote, type Note } from "opensheetmusicdisplay";
+import { measureTimeline, type MeasureTimeline } from "./accompaniment";
 import { DEFAULT_QPM, tempoMap } from "./tempo";
 
 /** Une note à jouer, dans l'ordre de la partition (silences et liaisons exclus). */
@@ -44,6 +45,7 @@ export class ScoreController {
   /** Tempo écrit au début du morceau, en noires par minute (120 sans indication, comme MuseScore). */
   tempo = DEFAULT_QPM;
   private tempos: number[] = [];
+  private timeline: MeasureTimeline = { startSec: [], secPerQuarter: [] };
   private gnotesByCursor = new Map<number, GraphicalNote[]>();
   private cursorIndex = 0;
 
@@ -61,6 +63,7 @@ export class ScoreController {
 
   async load(xml: string): Promise<void> {
     this.tempos = tempoMap(xml);
+    this.timeline = measureTimeline(xml);
     this.tempo = this.tempos[0] ?? DEFAULT_QPM;
     await this.osmd.load(xml);
     this.osmd.render();
@@ -75,18 +78,19 @@ export class ScoreController {
     this.steps = [];
     this.gnotesByCursor.clear();
     let i = 0;
-    let beat = 0;
-    let sec = 0;
     while (!cursor.Iterator.EndReached) {
       const notes = cursor.NotesUnderCursor();
-      const secPerBeat = 60 / (this.tempos[cursor.Iterator.CurrentMeasureIndex] ?? this.tempo);
+      // Instant de la note : début de sa mesure dans le calendrier commun au son (measureTimeline),
+      // plus sa position exacte dans la mesure. Pas de somme de durées : aucune dérive possible,
+      // même au piano où plusieurs voix se chevauchent.
+      const it = cursor.Iterator;
+      const m = it.CurrentMeasureIndex;
+      const secPerBeat = this.timeline.secPerQuarter[m] ?? 60 / (this.tempos[m] ?? this.tempo);
+      const inMeasure = (it.CurrentSourceTimestamp.RealValue - (it.CurrentMeasure?.AbsoluteTimestamp.RealValue ?? 0)) * 4;
+      const beat = it.CurrentSourceTimestamp.RealValue * 4;
+      const sec = (this.timeline.startSec[m] ?? 0) + inMeasure * secPerBeat;
       // Partition de flûte = monodique : on prend la note la plus aiguë s'il y a un accord.
       const playable = notes.filter((n) => !n.isRest() && !n.IsGraceNote && !isTieContinuation(n));
-      // Les appoggiatures ne prennent pas de temps dans la mesure.
-      const shortest = notes.filter((n) => !n.IsGraceNote).reduce(
-        (min, n) => Math.min(min, n.Length.RealValue * 4),
-        Number.POSITIVE_INFINITY,
-      );
       if (playable.length > 0) {
         const top = playable.reduce((a, b) => (noteToMidi(b) > noteToMidi(a) ? b : a));
         let beats = top.Length.RealValue * 4;
@@ -103,9 +107,6 @@ export class ScoreController {
         });
         this.gnotesByCursor.set(i, cursor.GNotesUnderCursor());
       }
-      const advance = Number.isFinite(shortest) ? shortest : 0;
-      beat += advance;
-      sec += advance * secPerBeat;
       cursor.next();
       i++;
     }
