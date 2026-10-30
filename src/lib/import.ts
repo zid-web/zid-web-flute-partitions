@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import type { CatalogEntry } from "./catalog";
 import { analyseScore, extractFlutePart, parseMusicXml, scoreWarnings } from "./difficulty";
+import { hasFlutePart, keepParts, pianoPartIds, type ScoreKind } from "./accompaniment";
 import { copyTempoMarks, hasTempoMarks, partTempoMap } from "./tempo";
 
 export const ACCEPTED_EXTENSIONS = ".mxl,.musicxml,.xml";
@@ -26,26 +27,58 @@ export async function readScoreBytes(bytes: Uint8Array): Promise<string> {
 export interface PreparedImport {
   entry: CatalogEntry;
   xml: string;
+  /** Partie(s) de piano gardée(s) pour l'accompagnement (partitions flûte + piano). */
+  accompaniment?: string;
   warnings: string[];
 }
 
-/** Garde la partie de flûte, calcule niveau et complexité, et prépare l'entrée de bibliothèque. */
+/** Copie ne gardant que certaines parties, avec le tempo de la partition (écrit dans la 1re partie). */
+function partsOnly(rawXml: string, ids: string[], tempos: number[]): string {
+  const doc = parseMusicXml(rawXml);
+  keepParts(doc, ids);
+  const first = doc.documentElement.querySelector(":scope > part");
+  if (first && !hasTempoMarks(first)) copyTempoMarks(tempos, first);
+  return new XMLSerializer().serializeToString(doc);
+}
+
+/**
+ * Repère les parties : flûte (suivie au micro), piano (accompagnement, ou partition pour piano
+ * seul jouée au piano). Calcule niveau et complexité, et prépare l'entrée de bibliothèque.
+ */
 export function prepareImport(rawXml: string, fileName: string): PreparedImport {
   const doc = parseMusicXml(rawXml);
   const firstPart = doc.documentElement.querySelector(":scope > part");
   const tempos = firstPart ? partTempoMap(firstPart) : [];
-  if (!extractFlutePart(doc)) {
-    throw new Error("Aucune partie de flûte trouvée : la partition contient plusieurs instruments sans flûte.");
+  const pianos = pianoPartIds(doc);
+  let kind: ScoreKind;
+  let accompaniment: string | undefined;
+  // Une partition dont toutes les parties sont pour piano (même une seule : « Piano », ou écrite
+  // sur deux portées) n'est pas une partition de flûte, sauf si une partie s'appelle flûte.
+  const allPiano = pianos.length > 0 && pianos.length === doc.documentElement.querySelectorAll(":scope > part").length;
+  if (!(allPiano && !hasFlutePart(doc)) && extractFlutePart(doc)) {
+    const flute = doc.documentElement.querySelector(":scope > part");
+    if (flute && !hasTempoMarks(flute)) copyTempoMarks(tempos, flute);
+    const keptId = flute?.getAttribute("id") ?? "";
+    const others = pianos.filter((id) => id !== keptId);
+    kind = others.length ? "flute-piano" : "flute";
+    if (others.length) accompaniment = partsOnly(rawXml, others, tempos);
+  } else if (pianos.length) {
+    kind = "piano";
+    keepParts(doc, pianos);
+    const first = doc.documentElement.querySelector(":scope > part");
+    if (first && !hasTempoMarks(first)) copyTempoMarks(tempos, first);
+  } else {
+    throw new Error("Aucune partie de flûte ni de piano trouvée dans cette partition.");
   }
-  const flute = doc.documentElement.querySelector(":scope > part");
-  if (flute && !hasTempoMarks(flute)) copyTempoMarks(tempos, flute);
   const a = analyseScore(doc);
   const xml = new XMLSerializer().serializeToString(doc);
   const fallbackTitle = fileName.replace(/\.(mxl|musicxml|xml)$/i, "");
   const title = a.title === "Sans titre" ? fallbackTitle : a.title;
   return {
     xml,
-    warnings: scoreWarnings(a),
+    accompaniment,
+    // une partition pour piano n'est pas suivie au micro : pas d'avertissement de tessiture de flûte
+    warnings: kind === "piano" ? [] : scoreWarnings(a),
     entry: {
       id: `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       title,
@@ -60,7 +93,8 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
       source: "Importée sur cet appareil",
       license: "Fichier personnel",
       origin: "import",
-      tags: ["importée"],
+      kind,
+      tags: kind === "flute" ? ["importée"] : ["importée", kind === "piano" ? "piano seul" : "avec piano"],
     },
   };
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pianoNotes, type PianoNote } from "../lib/accompaniment";
 import { LEVEL_LABELS, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
@@ -6,8 +7,10 @@ import { MicPitchSource } from "../lib/pitch";
 import { recordResult, type PieceProgress } from "../lib/progress";
 import { COLORS, ScoreController } from "../lib/score";
 import { isMyFluteEnabled, listTakes } from "../lib/myFlute";
+import { PianoSampler } from "../lib/piano";
 import { SampledFlute, type FlutePlayer } from "../lib/sampler";
 import { FluteSynth } from "../lib/synth";
+import { getUserScoreAccompaniment } from "../lib/userScores";
 import { Fingering } from "./Fingering";
 
 interface Props {
@@ -27,8 +30,12 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const followerRef = useRef<ScoreFollower | null>(null);
   const micRef = useRef<MicPitchSource | null>(null);
   const synthRef = useRef<FlutePlayer | null>(null);
-  // Vraie flûte (enregistrements) ; le synthétiseur ne sert que si elle ne peut pas être chargée.
-  const fluteRef = useRef<Promise<FlutePlayer> | null>(null);
+  // Sons, chargés au premier « Écouter » ou « Jouer » : vraie flûte (le synthétiseur ne sert que si
+  // elle ne peut pas être chargée) et vrai piano pour l'accompagnement, sur un même contexte audio.
+  const audioRef = useRef<{ ctx: AudioContext; flute: Promise<FlutePlayer>; piano?: Promise<PianoSampler | null> } | null>(null);
+  const pianoRef = useRef<PianoSampler | null>(null);
+  const pianoNotesRef = useRef<PianoNote[]>([]);
+  const pianoOnly = entry.kind === "piano";
   const timersRef = useRef<number[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -48,6 +55,9 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const [octaveTolerant, setOctaveTolerant] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [myFluteSound, setMyFluteSound] = useState(false);
+  // Partie de piano : accompagnement (flûte + piano) ou partition pour piano seul.
+  const [hasPiano, setHasPiano] = useState(false);
+  const [pianoOn, setPianoOn] = useState(true);
 
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
@@ -64,7 +74,14 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     let cancelled = false;
     setLoading(true);
     loadScoreXml(entry)
-      .then((xml) => controller.load(xml))
+      .then(async (xml) => {
+        // Notes de piano : la partie gardée à l'import (flûte + piano), ou toute la partition (piano seul).
+        const accompaniment =
+          entry.kind === "piano" ? xml : entry.kind === "flute-piano" ? await getUserScoreAccompaniment(entry.id) : null;
+        pianoNotesRef.current = accompaniment ? pianoNotes(accompaniment) : [];
+        if (!cancelled) setHasPiano(pianoNotesRef.current.length > 0);
+        return controller.load(xml);
+      })
       .then(() => {
         if (cancelled) return;
         followerRef.current = new ScoreFollower(
@@ -147,6 +164,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
     synthRef.current?.stop();
+    pianoRef.current?.stop();
     const score = scoreRef.current;
     score?.resetColors();
     score?.goToStep(0);
@@ -161,18 +179,79 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     setMode("idle");
   }, []);
 
+  /**
+   * Prépare les sons. Le contexte audio est créé tout de suite (dans le geste de l'utilisateur,
+   * exigé par Safari), puis les enregistrements se chargent : votre flûte (« Ma flûte ») si vous
+   * l'avez enregistrée, la flûte de référence sinon, et le piano s'il y a une partie de piano.
+   */
+  const ensureAudio = useCallback(async () => {
+    if (!audioRef.current) {
+      const ctx = new AudioContext({ latencyHint: "playback" });
+      void ctx.resume();
+      const flute: Promise<FlutePlayer> = pianoOnly
+        ? Promise.resolve(new FluteSynth(ctx))
+        : (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
+            .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
+            .then((f) => {
+              setMyFluteSound(f.usesMyFlute);
+              return f as FlutePlayer;
+            })
+            .catch(() => new FluteSynth(ctx));
+      audioRef.current = { ctx, flute };
+    }
+    const audio = audioRef.current;
+    if (!audio.piano && pianoNotesRef.current.length) audio.piano = PianoSampler.load(audio.ctx).catch(() => null);
+    await audio.ctx.resume();
+    synthRef.current ??= await audio.flute;
+    pianoRef.current ??= (await audio.piano) ?? null;
+  }, [pianoOnly]);
+
+  // Accompagnement pendant que vous jouez : à chaque note réussie, le piano joue sa partie
+  // jusqu'à votre note suivante (il vous suit, même si vous ralentissez).
+  const accompanyRef = useRef<(index: number) => void>(() => {});
+  accompanyRef.current = (index: number) => {
+    const piano = pianoRef.current;
+    const score = scoreRef.current;
+    if (!piano || !pianoOn || !score) return;
+    const from = score.steps[index];
+    if (!from) return;
+    piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.01, {
+      origin: from.startSec,
+      until: score.steps[index + 1]?.startSec ?? Infinity,
+      speed: tempo / score.tempo,
+    });
+  };
+
   const startMic = useCallback(async () => {
     restart();
     setMicError(null);
-    const mic = new MicPitchSource((r) => {
-      setHeard(r.midi);
-      const follower = followerRef.current;
-      if (follower) handleEvents(follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level }));
-    });
+    const accompanied = hasPiano && pianoOn;
+    if (accompanied) await ensureAudio();
+    const mic = new MicPitchSource(
+      (r) => {
+        setHeard(r.midi);
+        const follower = followerRef.current;
+        if (!follower) return;
+        const events = follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level });
+        for (const ev of events) if (ev.type === "hit") accompanyRef.current(ev.index);
+        handleEvents(events);
+      },
+      undefined,
+      undefined,
+      accompanied,
+    );
     try {
       await mic.start();
       micRef.current = mic;
       setMode("mic");
+      // Introduction de piano (avant la première note de flûte), au tempo choisi.
+      const score = scoreRef.current;
+      if (accompanied && pianoRef.current && score?.steps[0]) {
+        pianoRef.current.schedule(pianoNotesRef.current, pianoRef.current.ctx.currentTime + 0.3, {
+          until: score.steps[0].startSec,
+          speed: tempo / score.tempo,
+        });
+      }
     } catch (e) {
       setMicError(
         e instanceof DOMException && e.name === "NotAllowedError"
@@ -180,7 +259,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           : "Micro indisponible sur cet appareil.",
       );
     }
-  }, [handleEvents, restart]);
+  }, [handleEvents, restart, hasPiano, pianoOn, ensureAudio, tempo]);
 
   /**
    * Mode Écouter : l'application joue le morceau à partir de la note `from`, et la partition défile.
@@ -195,13 +274,18 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       timersRef.current.forEach(clearTimeout);
       timersRef.current = [];
       synth.stop();
+      pianoRef.current?.stop();
       const steps = score.steps.slice(from);
       if (steps.length === 0) return;
       const speed = tempo / score.tempo;
       const origin = steps[0].startSec;
       const at = (sec: number) => (sec - origin) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
-      const t0 = synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
+      const t0 = pianoOnly
+        ? synth.ctx.currentTime + 0.12
+        : synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
+      // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
+      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
       const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
       steps.forEach((s, k) => {
         const i = from + k;
@@ -228,30 +312,16 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       );
       timersRef.current.push(end);
     },
-    [tempo],
+    [tempo, pianoOn, pianoOnly],
   );
 
   const startListen = useCallback(async () => {
     restart();
-    if (!fluteRef.current) {
-      // Contexte audio créé tout de suite (dans le geste de l'utilisateur), puis chargement des sons :
-      // votre flûte (« Ma flûte ») si vous l'avez enregistrée, sinon la flûte de référence.
-      const ctx = new AudioContext({ latencyHint: "playback" });
-      void ctx.resume();
-      fluteRef.current = (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
-        .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
-        .then((flute) => {
-          setMyFluteSound(flute.usesMyFlute);
-          return flute as FlutePlayer;
-        })
-        .catch(() => new FluteSynth(ctx));
-    }
-    synthRef.current ??= await fluteRef.current;
-    await synthRef.current.resume();
+    await ensureAudio();
     setMode("listen");
     listenStepRef.current = 0;
     playFrom(0);
-  }, [restart, playFrom]);
+  }, [restart, playFrom, ensureAudio]);
 
   // Tempo changé pendant l'écoute : on repart de la note en cours à la nouvelle vitesse.
   useEffect(() => {
@@ -301,7 +371,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
             <span style={{ left: `${50 + Math.max(-50, Math.min(50, (cents ?? 0) / 2))}%` }} />
           </div>
         </div>
-        <Fingering midi={mode === "finished" ? null : expectedMidi} />
+        {!pianoOnly && <Fingering midi={mode === "finished" ? null : expectedMidi} />}
         <div className="stats">
           <span>
             🎵 {Math.min(step, total)}/{total}
@@ -316,7 +386,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       </div>
 
       <section className="controls">
-        {mode === "mic" ? (
+        {pianoOnly ? null : mode === "mic" ? (
           <button className="primary" onClick={restart}>
             ⏹ Arrêter
           </button>
@@ -328,9 +398,11 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
         <button onClick={mode === "listen" ? restart : startListen} disabled={loading}>
           {mode === "listen" ? "⏹ Stop" : "🔊 Écouter"}
         </button>
-        <button onClick={skipNote} disabled={loading || mode === "listen" || mode === "finished"}>
-          ⏭ Note suivante
-        </button>
+        {!pianoOnly && (
+          <button onClick={skipNote} disabled={loading || mode === "listen" || mode === "finished"}>
+            ⏭ Note suivante
+          </button>
+        )}
         <button onClick={restart} disabled={loading}>
           ↺ Recommencer
         </button>
@@ -343,13 +415,27 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
             </button>
           )}
         </label>
-        <label className="toggle">
-          <input type="checkbox" checked={octaveTolerant} onChange={(e) => setOctaveTolerant(e.target.checked)} />
-          Octave libre
-        </label>
+        {hasPiano && !pianoOnly && (
+          <label className="toggle" title="Accompagnement de piano, pendant l'écoute et pendant que vous jouez">
+            <input type="checkbox" checked={pianoOn} onChange={(e) => setPianoOn(e.target.checked)} />
+            🎹 Piano
+          </label>
+        )}
+        {!pianoOnly && (
+          <label className="toggle">
+            <input type="checkbox" checked={octaveTolerant} onChange={(e) => setOctaveTolerant(e.target.checked)} />
+            Octave libre
+          </label>
+        )}
       </section>
       {micError && <p className="message error">{micError}</p>}
-      {mode === "listen" && myFluteSound && <p className="sound-note">🎙️ Son : votre flûte</p>}
+      {mode === "listen" && myFluteSound && !pianoOnly && <p className="sound-note">🎙️ Son : votre flûte</p>}
+      {pianoOnly && (
+        <p className="sound-note">🎹 Partition pour piano : appuyez sur « Écouter » pour l'entendre au piano.</p>
+      )}
+      {hasPiano && !pianoOnly && pianoOn && mode === "mic" && (
+        <p className="sound-note">🎹 Le piano vous accompagne et suit votre jeu. Avec un casque, il ne gêne pas le micro.</p>
+      )}
       {entry.origin === "omr" && (
         <p className="omr-note">
           🔍 Partition reconnue automatiquement à partir d'un PDF scanné : une note peut être fausse. En cas de doute,

@@ -27,21 +27,25 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
   const [backupMessage, setBackupMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
   const [mineOnly, setMineOnly] = useState(false);
+  const [pianoFilter, setPianoFilter] = useState(false);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>(loadSortKey);
   // Mode « Supprimer plusieurs » : on coche des partitions importées au lieu de les ouvrir.
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const mineCount = catalog.filter((e) => e.origin === "import").length;
+  // Partitions avec une partie de piano (accompagnement ou piano seul), repérées à l'import.
+  const pianoCount = catalog.filter((e) => e.kind === "flute-piano" || e.kind === "piano").length;
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = catalog
       .filter((e) => !(mineOnly || selecting) || e.origin === "import")
+      .filter((e) => !pianoFilter || e.kind === "flute-piano" || e.kind === "piano")
       .filter((e) => level === 0 || e.level === level)
       .filter((e) => !q || `${e.title} ${e.composer}`.toLowerCase().includes(q));
     return sortEntries(filtered, sortKey);
-  }, [catalog, level, mineOnly, selecting, query, sortKey]);
+  }, [catalog, level, mineOnly, pianoFilter, selecting, query, sortKey]);
   const headings = useMemo(() => groupHeadings(shown, sortKey), [shown, sortKey]);
 
   const totalStars = Object.values(progress).reduce((s, p) => s + p.stars, 0);
@@ -105,7 +109,8 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
           <li>Débutant ? Cochez « Octave libre » : une note jouée à l'octave est acceptée.</li>
           <li>
             <b>📥 Importer une partition</b> : un fichier MusicXML (.mxl, .musicxml) téléchargé sur IMSLP ou ailleurs.
-            Il reste sur cet appareil et fonctionne hors ligne.
+            Il reste sur cet appareil et fonctionne hors ligne. Une partie de piano est repérée et gardée : 🎹 le
+            piano vous accompagne ; une partition pour piano seul s'écoute au piano.
           </li>
           <li>
             <b>Ranger</b> : « Trier par » classe les morceaux par niveau, date d'import, compositeur ou titre.
@@ -134,6 +139,11 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
         {mineCount > 0 && (
           <button className={mineOnly ? "chip active" : "chip"} onClick={() => setMineOnly((m) => !m)}>
             📥 Mes partitions ({mineCount})
+          </button>
+        )}
+        {pianoCount > 0 && (
+          <button className={pianoFilter ? "chip active" : "chip"} onClick={() => setPianoFilter((p) => !p)}>
+            🎹 Avec piano ({pianoCount})
           </button>
         )}
         <input
@@ -252,6 +262,16 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
                   <span className="level-badge">
                     Niveau {e.level} · {LEVEL_LABELS[e.level]}
                     {e.origin === "import" && <span className="mine-badge">importée</span>}
+                    {e.kind === "flute-piano" && (
+                      <span className="mine-badge" title="Flûte accompagnée au piano">
+                        🎹 avec piano
+                      </span>
+                    )}
+                    {e.kind === "piano" && (
+                      <span className="mine-badge" title="Partition pour piano : à écouter">
+                        🎹 piano seul
+                      </span>
+                    )}
                     {e.origin === "omr" && (
                       <span className="mine-badge" title="Reconnue automatiquement à partir d'un PDF scanné">
                         🔍 reconnue
@@ -298,6 +318,9 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
       <footer className="credits">
         Partitions du domaine public (IMSLP et répertoire traditionnel). Fonctionne hors ligne. Les partitions
         importées restent sur cet appareil. Version {__APP_VERSION__}, mise à jour automatique.
+        <br />
+        Sons : flûte VSCO-2 Community Edition, Versilian Studios (CC0) ; piano Salamander Grand Piano, Alexander Holm
+        (CC-BY 3.0).
       </footer>
     </main>
   );

@@ -1,0 +1,4 @@
+Échantillons de piano : Salamander Grand Piano (Yamaha C5), par Alexander Holm.
+Licence : Creative Commons Attribution 3.0 (CC-BY 3.0) — http://creativecommons.org/licenses/by/3.0/
+Version MP3 du dépôt Tone.js (https://github.com/Tonejs/audio), raccourcie à 6 s avec fondu
+par scripts/piano_samples.py.

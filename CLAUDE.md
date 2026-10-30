@@ -13,6 +13,7 @@ Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français 
 - Hors ligne obligatoire : aucune fonction ne doit **dépendre** du réseau, pas de police ni de script externes. Seules exceptions, facultatives : la recherche de mise à jour (`src/lib/appUpdate.ts`, service worker) et, dans les applications natives, la synchronisation du catalogue depuis Vercel (`src/lib/contentSync.ts`).
 - Son « Écouter » : vraie flûte enregistrée (`src/lib/sampler.ts`, `public/samples/flute/`, VSCO-2 CE en CC0, préparée par `scripts/flute_samples.py`) ; `src/lib/synth.ts` ne sert que si les échantillons ne se chargent pas.
 - « Ma flûte » : notes enregistrées par l'utilisateur (`src/lib/myFlute.ts`, analyse pure et testée), gardées sur l'appareil (IndexedDB `flute-ma-flute`), jamais envoyées ; prioritaires à ±3 demi-tons pour « Écouter ».
+- Piano : à l'import, les parties de piano sont repérées (`src/lib/accompaniment.ts`, pur et testé) — flûte + piano = accompagnement qui suit le jeu au micro, piano seul = écoute ; vrai piano `src/lib/piano.ts` (`public/samples/piano/`, Salamander Grand Piano CC-BY 3.0, `scripts/piano_samples.py`, crédit obligatoire).
 - Mises à jour : jamais d'installation pendant un morceau (`setBusy`), uniquement depuis la bibliothèque.
 - Difficulté : `difficulty.py` (skill) et `src/lib/difficulty.ts` (import dans l'app) doivent rester identiques ; le test d'import le vérifie sur `catalog.json`.
 - Partitions importées : uniquement sur l'appareil (`src/lib/userScores.ts`, IndexedDB), jamais envoyées sur un serveur.
