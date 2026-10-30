@@ -22,7 +22,7 @@ export default defineConfig({
       workbox: {
         // The scores and the catalog are precached: the app works offline
         // after the first visit.
-        globPatterns: ["**/*.{js,css,html,svg,png,json,musicxml,xml}"],
+        globPatterns: ["**/*.{js,css,html,svg,png,json,musicxml,xml,mp3}"],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
       manifest: {
