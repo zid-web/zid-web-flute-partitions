@@ -54,9 +54,9 @@ export function App() {
 
   const all = useMemo(() => [...userScores, ...(catalog ?? [])], [catalog, userScores]);
 
-  const removeUserScore = useCallback(async (entry: CatalogEntry) => {
+  const removeUserScores = useCallback(async (entries: CatalogEntry[]) => {
     try {
-      await deleteUserScore(entry.id);
+      for (const entry of entries) await deleteUserScore(entry.id);
     } finally {
       setUserScores(await listUserScores());
     }
@@ -96,7 +96,7 @@ export function App() {
           progress={progress}
           onOpen={setCurrent}
           onImported={(entry) => setUserScores((list) => [entry, ...list])}
-          onDelete={(entry) => void removeUserScore(entry)}
+          onDelete={(entries) => void removeUserScores(entries)}
         />
       )}
     </>

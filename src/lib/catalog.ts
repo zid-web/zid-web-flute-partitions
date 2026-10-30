@@ -21,6 +21,8 @@ export interface CatalogEntry {
   /** "native" = MusicXML d'origine, "omr" = reconnu depuis un PDF puis relu, "import" = fichier de l'utilisateur. */
   origin: "native" | "omr" | "original" | "import";
   tags?: string[];
+  /** Partitions importées seulement : date d'import (ms), pour les ranger par ordre d'import. */
+  addedAt?: number;
 }
 
 export const LEVEL_LABELS: Record<CatalogEntry["level"], string> = {
