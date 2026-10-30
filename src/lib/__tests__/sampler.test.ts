@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickSample, sampleGain, sustainEnd } from "../sampler";
+import { chooseSource, pickSample, sampleGain, sustainEnd } from "../sampler";
 
 const NOTES = [60, 64, 69, 72, 76, 81, 84, 88, 93, 96];
 
@@ -33,5 +33,15 @@ describe("fin de la partie tenue", () => {
     }
     expect(sustainEnd(data, rate)).toBeGreaterThan(1.9);
     expect(sustainEnd(data, rate)).toBeLessThan(2.25);
+  });
+});
+
+describe("« Ma flûte » d'abord", () => {
+  it("utilise une note enregistrée par l'utilisateur à 3 demi-tons au plus, sinon la référence", () => {
+    const mine = [69, 72];
+    expect(chooseSource(70, mine, NOTES)).toEqual({ mine: true, sample: 69 });
+    expect(chooseSource(75, mine, NOTES)).toEqual({ mine: true, sample: 72 });
+    expect(chooseSource(60, mine, NOTES)).toEqual({ mine: false, sample: 60 });
+    expect(chooseSource(90, [], NOTES)).toEqual({ mine: false, sample: 88 });
   });
 });

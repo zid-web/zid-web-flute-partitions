@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Library } from "./components/Library";
+import { MyFlute } from "./components/MyFlute";
 import { Player } from "./components/Player";
 import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
@@ -19,6 +20,7 @@ export function App() {
   const [userScores, setUserScores] = useState<CatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState<CatalogEntry | null>(null);
+  const [myFlute, setMyFlute] = useState(false);
   const [progress, setProgress] = useState<Record<string, PieceProgress>>(loadProgress);
   const [news, setNews] = useState<string | null>(null);
   const [updateWaiting, setUpdateWaiting] = useState(false);
@@ -55,7 +57,7 @@ export function App() {
   }, []);
 
   // Une mise à jour de l'application n'est jamais installée pendant un morceau.
-  useEffect(() => setBusy(current !== null), [current]);
+  useEffect(() => setBusy(current !== null || myFlute), [current, myFlute]);
 
   useEffect(() => {
     if (!news) return;
@@ -113,8 +115,11 @@ export function App() {
           onProgress={setProgress}
           bestStars={progress[current.id]?.stars ?? 0}
         />
+      ) : myFlute ? (
+        <MyFlute onBack={() => setMyFlute(false)} />
       ) : (
         <Library
+          onMyFlute={() => setMyFlute(true)}
           catalog={all}
           progress={progress}
           onOpen={setCurrent}

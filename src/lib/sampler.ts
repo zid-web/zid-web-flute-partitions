@@ -1,3 +1,4 @@
+import { MY_FLUTE_REACH, type StoredTake } from "./myFlute";
 import type { ScheduledNote } from "./synth";
 
 /**
@@ -49,6 +50,18 @@ export function sustainEnd(data: Float32Array, sampleRate: number): number {
   return (last * win) / sampleRate;
 }
 
+/**
+ * « Ma flûte » d'abord : une note enregistrée par l'utilisateur à 3 demi-tons au plus ;
+ * sinon la flûte de référence.
+ */
+export function chooseSource(midi: number, mine: number[], reference: number[]): { mine: boolean; sample: number } {
+  if (mine.length) {
+    const { sample } = pickSample(midi, mine);
+    if (Math.abs(sample - midi) <= MY_FLUTE_REACH) return { mine: true, sample };
+  }
+  return { mine: false, sample: pickSample(midi, reference).sample };
+}
+
 /** Volume selon le registre : la flûte est douce dans le grave et plus brillante dans l'aigu. */
 export function sampleGain(midi: number): number {
   return 0.85 + 0.35 * Math.min(1, Math.max(0, (midi - 60) / 30));
@@ -63,12 +76,22 @@ export class SampledFlute implements FlutePlayer {
   private reverbIn: AudioNode;
   private bus: GainNode;
   private notes: number[];
-  private ends = new Map<number, number>();
+  private ends = new Map<AudioBuffer, number>();
+  private mine = new Map<number, { buffer: AudioBuffer; cents: number }>();
+  private myNotes: number[] = [];
 
-  private constructor(ctx: BaseAudioContext, private buffers: Map<number, AudioBuffer>) {
+  private constructor(ctx: BaseAudioContext, private buffers: Map<number, AudioBuffer>, takes: StoredTake[]) {
     this.ctx = ctx;
     this.notes = [...buffers.keys()].sort((a, b) => a - b);
-    for (const [midi, buffer] of buffers) this.ends.set(midi, sustainEnd(buffer.getChannelData(0), buffer.sampleRate));
+    for (const take of takes) {
+      const buffer = ctx.createBuffer(1, take.pcm.length, take.sampleRate);
+      buffer.copyToChannel(new Float32Array(take.pcm), 0);
+      this.mine.set(take.midi, { buffer, cents: take.cents });
+    }
+    this.myNotes = [...this.mine.keys()].sort((a, b) => a - b);
+    for (const buffer of [...buffers.values(), ...[...this.mine.values()].map((m) => m.buffer)]) {
+      this.ends.set(buffer, sustainEnd(buffer.getChannelData(0), buffer.sampleRate));
+    }
     const compressor = ctx.createDynamicsCompressor();
     compressor.threshold.value = -12;
     compressor.ratio.value = 2.5;
@@ -84,8 +107,20 @@ export class SampledFlute implements FlutePlayer {
     this.bus = this.newBus();
   }
 
-  /** Charge les enregistrements (depuis le cache hors ligne après la première visite). */
-  static async load(ctx: BaseAudioContext = new AudioContext({ latencyHint: "playback" }), baseUrl = import.meta.env.BASE_URL) {
+  /** Vrai si au moins une note de « Ma flûte » est utilisée. */
+  get usesMyFlute(): boolean {
+    return this.myNotes.length > 0;
+  }
+
+  /**
+   * Charge les enregistrements de référence (depuis le cache hors ligne après la première visite)
+   * et, s'il y en a, les notes de « Ma flûte » enregistrées sur l'appareil.
+   */
+  static async load(
+    ctx: BaseAudioContext = new AudioContext({ latencyHint: "playback" }),
+    baseUrl = import.meta.env.BASE_URL,
+    takes: StoredTake[] = [],
+  ) {
     const dir = `${baseUrl}samples/flute/`;
     const notes = (await (await fetch(`${dir}notes.json`)).json()) as number[];
     const entries = await Promise.all(
@@ -95,7 +130,7 @@ export class SampledFlute implements FlutePlayer {
         return [midi, await ctx.decodeAudioData(await res.arrayBuffer())] as const;
       }),
     );
-    return new SampledFlute(ctx, new Map(entries));
+    return new SampledFlute(ctx, new Map(entries), takes);
   }
 
   async resume(): Promise<void> {
@@ -143,13 +178,16 @@ export class SampledFlute implements FlutePlayer {
    * `slurredIn` : la précédente enchaînait, on entre sans la petite attaque soufflée.
    */
   private note(midi: number, t: number, written: number, legato: boolean, slurredIn: boolean): void {
-    const { sample, rate } = pickSample(midi, this.notes);
-    const buffer = this.buffers.get(sample);
+    const source = chooseSource(midi, this.myNotes, this.notes);
+    const mine = source.mine ? this.mine.get(source.sample) : undefined;
+    const buffer = mine?.buffer ?? this.buffers.get(source.sample);
     if (!buffer) return;
+    // transposition, et correction de la justesse mesurée à l'enregistrement de « Ma flûte »
+    const rate = Math.pow(2, (midi - source.sample - (mine?.cents ?? 0) / 100) / 12);
     const sounding = Math.max(0.08, written * (legato ? 0.98 : 0.9));
     const end = t + sounding;
     const level = sampleGain(midi);
-    const held = this.ends.get(sample) ?? buffer.duration;
+    const held = this.ends.get(buffer) ?? buffer.duration;
 
     const env = this.ctx.createGain();
     env.gain.setValueAtTime(0, t);

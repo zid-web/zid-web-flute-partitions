@@ -14,13 +14,15 @@ interface Props {
   onBackup: () => Promise<void>;
   /** Restaure un fichier de sauvegarde ; renvoie le message à afficher. */
   onRestore: (file: File) => Promise<string>;
+  /** Ouvre « Ma flûte » (enregistrer le son de sa flûte). */
+  onMyFlute: () => void;
 }
 
 const LEVELS = [1, 2, 3, 4, 5] as const;
 const SORT_KEYS = Object.keys(SORT_LABELS) as SortKey[];
 const dateFormat = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" });
 
-export function Library({ catalog, progress, onOpen, onImported, onDelete, onBackup, onRestore }: Props) {
+export function Library({ catalog, progress, onOpen, onImported, onDelete, onBackup, onRestore, onMyFlute }: Props) {
   const restoreInput = useRef<HTMLInputElement>(null);
   const [backupMessage, setBackupMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
@@ -79,8 +81,13 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
           <h1>🎶 Flûte Partitions</h1>
           <p>Choisissez un morceau, jouez : chaque note s'allume quand vous la réussissez.</p>
         </div>
-        <div className="star-total" title="Étoiles gagnées">
-          ⭐ {totalStars}
+        <div className="hero-side">
+          <div className="star-total" title="Étoiles gagnées">
+            ⭐ {totalStars}
+          </div>
+          <button className="my-flute-button" onClick={onMyFlute} title="Enregistrer le son de votre flûte">
+            🎙️ Ma flûte
+          </button>
         </div>
       </header>
 
@@ -103,6 +110,10 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
           <li>
             <b>Ranger</b> : « Trier par » classe les morceaux par niveau, date d'import, compositeur ou titre.
             <b> 🗑 Supprimer…</b> permet d'effacer plusieurs partitions importées d'un coup.
+          </li>
+          <li>
+            <b>🎙️ Ma flûte</b> : enregistrez quelques notes de votre flûte ; « Écouter » jouera ensuite les partitions
+            avec votre son.
           </li>
           <li>
             <b>💾 Sauvegarder</b> enregistre une copie de vos partitions importées ; <b>♻️ Restaurer</b> les remet
