@@ -100,8 +100,20 @@ button.ghost { border-color: transparent; background: transparent; }
 .confetti span { position: absolute; top: -40px; font-size: 1.6rem; animation: fall 2.6s linear infinite; }
 @keyframes fall { to { transform: translateY(110vh) rotate(360deg); } }
 
+/* Pendant l'écoute et le jeu, la note à jouer et la flûte restent visibles en haut de l'écran
+   pendant que la partition défile (le curseur d'OSMD fait défiler la page). */
+.player.playing .hud { position: sticky; top: 0; z-index: 5; background: var(--bg); margin: 0 -16px; padding: 0.5rem 16px;
+  box-shadow: 0 6px 12px -8px rgba(0,0,0,0.25); }
+
 @media (max-width: 720px) {
   .hud { grid-template-columns: 1fr 1fr; }
+  .player.playing .hud { gap: 0.4rem; padding-top: max(0.4rem, env(safe-area-inset-top)); }
+  .player.playing .note-box { padding: 0.3rem 0.6rem; }
+  .player.playing .note-box b { font-size: 1.35rem; }
+  .player.playing .fingering { padding: 0.25rem 0.5rem; }
+  .player.playing .fingering svg { max-height: 88px; }
+  .player.playing .fingering figcaption { display: none; }
+  .player.playing .stats { font-size: 0.9rem; }
   .fingering { grid-column: 1 / -1; }
   .stats { grid-column: 1 / -1; flex-direction: row; justify-content: space-around; }
   .note-box { min-width: 0; }
