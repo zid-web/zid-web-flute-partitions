@@ -7,7 +7,7 @@ import type { CatalogEntry } from "./catalog";
 const DB_NAME = "flute-partitions";
 const STORE = "user-scores";
 
-interface StoredScore {
+export interface StoredScore {
   entry: CatalogEntry;
   xml: string;
   addedAt: number;
@@ -60,4 +60,52 @@ export async function getUserScoreXml(id: string): Promise<string> {
   const stored = await run<StoredScore | undefined>("readonly", (s) => s.get(id));
   if (!stored) throw new Error("Partition importée introuvable sur cet appareil.");
   return stored.xml;
+}
+
+/**
+ * Demande au navigateur de ne pas effacer ce stockage de lui-même (Safari supprime sinon les
+ * données d'un site peu visité ; Chrome peut les libérer quand l'appareil manque de place).
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    return (await navigator.storage?.persist?.()) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Fichier de sauvegarde : toutes les partitions importées, à garder et à restaurer ailleurs. */
+export const BACKUP_FORMAT = "flute-partitions-sauvegarde";
+
+export async function exportUserScores(): Promise<string> {
+  const scores = await run<StoredScore[]>("readonly", (s) => s.getAll());
+  return JSON.stringify({ format: BACKUP_FORMAT, version: 1, scores });
+}
+
+/** Vérifie un fichier de sauvegarde et renvoie les partitions qu'il contient. */
+export function parseBackup(text: string): StoredScore[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Ce fichier n'est pas une sauvegarde de partitions.");
+  }
+  const backup = data as { format?: unknown; scores?: unknown };
+  if (backup?.format !== BACKUP_FORMAT || !Array.isArray(backup.scores)) {
+    throw new Error("Ce fichier n'est pas une sauvegarde de partitions.");
+  }
+  return backup.scores.filter(
+    (s): s is StoredScore =>
+      typeof s?.entry?.id === "string" &&
+      typeof s?.entry?.title === "string" &&
+      typeof s?.xml === "string" &&
+      s.xml.includes("score-partwise"),
+  ).map((s) => ({ entry: { ...s.entry, origin: "import" }, xml: s.xml, addedAt: Number(s.addedAt) || Date.now() }));
+}
+
+/** Restaure une sauvegarde (les partitions déjà présentes sont remplacées par leur copie). Renvoie le nombre restauré. */
+export async function restoreUserScores(text: string): Promise<number> {
+  const scores = parseBackup(text);
+  for (const score of scores) await run("readwrite", (s) => s.put(score));
+  return scores.length;
 }

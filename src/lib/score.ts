@@ -1,4 +1,5 @@
 import { OpenSheetMusicDisplay, type GraphicalNote, type Note } from "opensheetmusicdisplay";
+import { DEFAULT_QPM, tempoMap } from "./tempo";
 
 /** Une note à jouer, dans l'ordre de la partition (silences et liaisons exclus). */
 export interface ScoreStep {
@@ -7,8 +8,11 @@ export interface ScoreStep {
   beats: number;
   /** Position du curseur OSMD correspondante. */
   cursorIndex: number;
-  /** Nombre de noires depuis le début (pour le mode Écouter). */
+  /** Nombre de noires depuis le début. */
   startBeat: number;
+  /** Début et durée en secondes au tempo écrit (changements de tempo compris), pour le mode Écouter. */
+  startSec: number;
+  seconds: number;
 }
 
 export const COLORS = {
@@ -37,6 +41,9 @@ function isTieContinuation(note: Note): boolean {
 export class ScoreController {
   readonly osmd: OpenSheetMusicDisplay;
   steps: ScoreStep[] = [];
+  /** Tempo écrit au début du morceau, en noires par minute (120 sans indication, comme MuseScore). */
+  tempo = DEFAULT_QPM;
+  private tempos: number[] = [];
   private gnotesByCursor = new Map<number, GraphicalNote[]>();
   private cursorIndex = 0;
 
@@ -53,6 +60,8 @@ export class ScoreController {
   }
 
   async load(xml: string): Promise<void> {
+    this.tempos = tempoMap(xml);
+    this.tempo = this.tempos[0] ?? DEFAULT_QPM;
     await this.osmd.load(xml);
     this.osmd.render();
     this.indexSteps();
@@ -67,11 +76,14 @@ export class ScoreController {
     this.gnotesByCursor.clear();
     let i = 0;
     let beat = 0;
+    let sec = 0;
     while (!cursor.Iterator.EndReached) {
       const notes = cursor.NotesUnderCursor();
+      const secPerBeat = 60 / (this.tempos[cursor.Iterator.CurrentMeasureIndex] ?? this.tempo);
       // Partition de flûte = monodique : on prend la note la plus aiguë s'il y a un accord.
       const playable = notes.filter((n) => !n.isRest() && !n.IsGraceNote && !isTieContinuation(n));
-      const shortest = notes.reduce(
+      // Les appoggiatures ne prennent pas de temps dans la mesure.
+      const shortest = notes.filter((n) => !n.IsGraceNote).reduce(
         (min, n) => Math.min(min, n.Length.RealValue * 4),
         Number.POSITIVE_INFINITY,
       );
@@ -81,10 +93,19 @@ export class ScoreController {
         // Ajoute la durée des notes liées qui suivent.
         const tie = top.NoteTie;
         if (tie) beats = tie.Notes.reduce((s, n) => s + n.Length.RealValue * 4, 0);
-        this.steps.push({ midi: noteToMidi(top), beats, cursorIndex: i, startBeat: beat });
+        this.steps.push({
+          midi: noteToMidi(top),
+          beats,
+          cursorIndex: i,
+          startBeat: beat,
+          startSec: sec,
+          seconds: beats * secPerBeat,
+        });
         this.gnotesByCursor.set(i, cursor.GNotesUnderCursor());
       }
-      beat += Number.isFinite(shortest) ? shortest : 0;
+      const advance = Number.isFinite(shortest) ? shortest : 0;
+      beat += advance;
+      sec += advance * secPerBeat;
       cursor.next();
       i++;
     }

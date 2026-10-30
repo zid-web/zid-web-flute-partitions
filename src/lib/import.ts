@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import type { CatalogEntry } from "./catalog";
 import { analyseScore, extractFlutePart, parseMusicXml, scoreWarnings } from "./difficulty";
+import { copyTempoMarks, hasTempoMarks, partTempoMap } from "./tempo";
 
 export const ACCEPTED_EXTENSIONS = ".mxl,.musicxml,.xml";
 
@@ -31,9 +32,13 @@ export interface PreparedImport {
 /** Garde la partie de flûte, calcule niveau et complexité, et prépare l'entrée de bibliothèque. */
 export function prepareImport(rawXml: string, fileName: string): PreparedImport {
   const doc = parseMusicXml(rawXml);
+  const firstPart = doc.documentElement.querySelector(":scope > part");
+  const tempos = firstPart ? partTempoMap(firstPart) : [];
   if (!extractFlutePart(doc)) {
     throw new Error("Aucune partie de flûte trouvée : la partition contient plusieurs instruments sans flûte.");
   }
+  const flute = doc.documentElement.querySelector(":scope > part");
+  if (flute && !hasTempoMarks(flute)) copyTempoMarks(tempos, flute);
   const a = analyseScore(doc);
   const xml = new XMLSerializer().serializeToString(doc);
   const fallbackTitle = fileName.replace(/\.(mxl|musicxml|xml)$/i, "");

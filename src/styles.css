@@ -137,6 +137,8 @@ button.link { border: 0; background: none; padding: 0; color: var(--primary); te
 .arrange { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin: -0.25rem 0 1rem; }
 .sort { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.9rem; }
 .sort select { font: inherit; color: var(--ink); padding: 0.4rem 0.75rem; border-radius: 999px; border: 2px solid #e5e7eb; background: var(--card); }
+.backup { display: flex; gap: 0.25rem; margin-left: auto; }
+.select-hint.error { color: var(--bad); }
 .select-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
 button.danger:disabled { opacity: 0.45; }
