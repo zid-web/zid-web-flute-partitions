@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { keepParts, pianoNotes, pianoPartIds } from "../accompaniment";
+import { keepParts, melodyOrnaments, pianoNotes, pianoPartIds } from "../accompaniment";
 
 const n = (step: string, octave: number, dur: number, extra = "") =>
   `<note>${extra.includes("<chord/>") ? "<chord/>" : ""}<pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${dur}</duration>${extra.replace("<chord/>", "")}</note>`;
@@ -108,5 +108,21 @@ describe("ornements joués par le piano", () => {
 
   it("une note sans ornement ne change pas", () => {
     expect(pianoNotes(piece(n("C", 5, 4))).map((x) => [x.midi, x.seconds])).toEqual([[72, 2]]);
+  });
+});
+
+describe("ornements de la mélodie (flûte, mode Écouter)", () => {
+  it("une entrée par note attaquée : silences, notes liées, accords et appoggiatures ignorés", () => {
+    const xml = `<?xml version="1.0"?><score-partwise><part-list><score-part id="P1"><part-name>Flûte</part-name></score-part></part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions><key><fifths>1</fifths></key></attributes>
+${n("G", 4, 1)}<note><grace/><pitch><step>A</step><octave>4</octave></pitch></note>
+${n("E", 5, 1, '<notations><ornaments><trill-mark/></ornaments></notations>')}${n("C", 5, 1, "<chord/>")}
+<note><rest/><duration>1</duration></note>${n("A", 4, 1, '<tie type="start"/>')}</measure>
+<measure number="2">${n("A", 4, 2, '<tie type="stop"/>')}${n("B", 4, 2, '<notations><ornaments><mordent/></ornaments></notations>')}</measure>
+</part></score-partwise>`;
+    const orns = melodyOrnaments(xml);
+    expect(orns.map((o) => o?.type ?? null)).toEqual([null, "trill", null, "mordent"]); // Sol, Mi (trille), La (lié), Si
+    expect(orns[1]?.upper).toBe(78); // Mi5 → Fa♯5 en Sol majeur
+    expect(orns[3]?.lower).toBe(69); // Si4 → La4
   });
 });

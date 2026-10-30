@@ -44,7 +44,7 @@ export function neighbour(step: string, octave: number, dir: 1 | -1, fifths: num
   return (oct + 1) * 12 + STEP[letter] + (accidental ?? keyAlter(letter, fifths));
 }
 
-interface PendingOrnament {
+export interface PendingOrnament {
   type: Ornament;
   upper: number;
   lower: number;
@@ -249,6 +249,33 @@ export function pianoNotes(xml: string, partIds?: string[]): PianoNote[] {
   return notes
     .flatMap((n) => (ornaments.has(n) ? expandOrnament(n, ornaments.get(n)!) : [n]))
     .sort((a, b) => a.startSec - b.startSec || a.midi - b.midi);
+}
+
+/**
+ * Ornements de la mélodie (première partie), dans l'ordre des notes jouées : une entrée par note
+ * attaquée (ni silence, ni appoggiature, ni suite de note liée, ni note d'accord), null sans ornement.
+ * Sert à faire jouer les trilles de la flûte par « Écouter », note par note avec le curseur.
+ */
+export function melodyOrnaments(xml: string): (PendingOrnament | null)[] {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const part = children(doc.documentElement, "part")[0];
+  const out: (PendingOrnament | null)[] = [];
+  if (!part) return out;
+  let fifths = 0;
+  for (const measure of children(part, "measure")) {
+    for (const el of Array.from(measure.children)) {
+      if (el.localName === "attributes") {
+        const key = child(el, "key");
+        if (key && text(key, "fifths") !== undefined) fifths = Number(text(key, "fifths")) || 0;
+      }
+      if (el.localName !== "note" || child(el, "grace") || child(el, "cue") || child(el, "chord") || child(el, "rest")) continue;
+      const pitch = child(el, "pitch");
+      if (!pitch) continue;
+      if (children(el, "tie").some((t) => t.getAttribute("type") === "stop")) continue;
+      out.push(readOrnament(el, text(pitch, "step") ?? "C", Number(text(pitch, "octave")), fifths));
+    }
+  }
+  return out;
 }
 
 /** Ornement écrit sur une note (`<notations><ornaments>`), avec l'altération éventuelle de la voisine. */

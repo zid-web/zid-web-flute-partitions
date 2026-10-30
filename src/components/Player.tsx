@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pianoNotes, splitAccompaniment, type PianoNote } from "../lib/accompaniment";
+import {
+  expandOrnament,
+  melodyOrnaments,
+  pianoNotes,
+  splitAccompaniment,
+  type PendingOrnament,
+  type PianoNote,
+} from "../lib/accompaniment";
 import { LEVEL_LABELS, loadAccompanimentXml, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
@@ -36,6 +43,8 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const pianoNotesRef = useRef<PianoNote[]>([]);
   // 2ᵉ flûte d'un duo : jouée par l'application (même son de flûte), pendant que vous jouez la 1ʳᵉ.
   const flute2NotesRef = useRef<PianoNote[]>([]);
+  // Ornements de la mélodie (trilles…), joués par « Écouter » : un par note de la partition.
+  const ornamentsRef = useRef<(PendingOrnament | null)[]>([]);
   const pianoOnly = entry.kind === "piano";
   const timersRef = useRef<number[]>([]);
 
@@ -80,6 +89,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       .then(async (xml) => {
         // Parties jouées par l'application : toute la partition (piano seul), ou l'accompagnement gardé
         // à l'import ou publié avec le morceau (piano et/ou 2ᵉ flûte).
+        ornamentsRef.current = entry.kind === "piano" ? [] : melodyOrnaments(xml);
         if (entry.kind === "piano") {
           pianoNotesRef.current = pianoNotes(xml);
           flute2NotesRef.current = [];
@@ -293,9 +303,19 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       const origin = steps[0].startSec;
       const at = (sec: number) => (sec - origin) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
-      const t0 = pianoOnly
-        ? synth.ctx.currentTime + 0.12
-        : synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
+      // Ornements écrits (trilles, mordants…) développés en notes, si la partition et le curseur
+      // comptent les mêmes notes (sinon, par prudence, la mélodie est jouée sans ornement).
+      const ornaments = ornamentsRef.current.length === score.steps.length ? ornamentsRef.current : [];
+      const melody = steps.flatMap((s, k) => {
+        const note = { midi: s.midi, startSec: s.startSec, seconds: s.seconds, velocity: 1 };
+        const o = ornaments[from + k];
+        return (o ? expandOrnament(note, o) : [note]).map((n) => ({
+          midi: n.midi,
+          start: at(n.startSec),
+          duration: n.seconds / speed,
+        }));
+      });
+      const t0 = pianoOnly ? synth.ctx.currentTime + 0.12 : synth.schedule(melody);
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
       if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
       if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, speed });
