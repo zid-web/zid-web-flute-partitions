@@ -48,6 +48,8 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const melodyRef = useRef<MelodyNote[]>([]);
   const pianoOnly = entry.kind === "piano";
   const timersRef = useRef<number[]>([]);
+  // Boucle d'affichage du mode Écouter (synchronisée sur l'horloge audio).
+  const rafRef = useRef(0);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -124,6 +126,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       micRef.current?.stop();
       synthRef.current?.close();
       timersRef.current.forEach(clearTimeout);
+      cancelAnimationFrame(rafRef.current);
       controller.dispose();
     };
   }, [entry]);
@@ -187,6 +190,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     micRef.current = null;
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
+    cancelAnimationFrame(rafRef.current);
     synthRef.current?.stop();
     pianoRef.current?.stop();
     const score = scoreRef.current;
@@ -296,6 +300,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       if (!score || !synth) return;
       timersRef.current.forEach(clearTimeout);
       timersRef.current = [];
+      cancelAnimationFrame(rafRef.current);
       synth.stop();
       pianoRef.current?.stop();
       const steps = score.steps.slice(from);
@@ -329,31 +334,40 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
       if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
       if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, speed });
-      const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
-      steps.forEach((s, k) => {
-        const i = from + k;
-        const t = window.setTimeout(() => {
-          if (i > 0) score.color(i - 1, COLORS.hit);
-          score.goToStep(i);
-          listenStepRef.current = i;
-          setStep(i);
-          setHeard(s.midi);
-        }, offsetMs + at(s.startSec) * 1000);
-        timersRef.current.push(t);
-      });
+      // Le curseur suit l'horloge audio, pas des minuteries : à chaque image, on regarde l'instant
+      // réellement entendu (latence de sortie de la carte son comprise) et on place le curseur sur
+      // la note qui sonne. Si la page a été ralentie, il rattrape aussitôt au lieu d'accumuler du retard.
+      const ctx = synth.ctx;
+      const latency = ctx instanceof AudioContext ? (ctx.outputLatency || ctx.baseLatency || 0) : 0;
+      const starts = steps.map((s) => t0 + at(s.startSec));
       const last = steps[steps.length - 1];
-      const end = window.setTimeout(
-        () => {
+      const endAt = t0 + at(last.startSec) + last.seconds / speed + 0.3;
+      let shown = -1; // dernière note affichée (indice dans `steps`)
+      const tick = () => {
+        const heardAt = ctx.currentTime - latency;
+        if (heardAt >= endAt) {
           score.resetColors();
           score.goToStep(0);
           listenStepRef.current = 0;
           setStep(0);
           setHeard(null);
           setMode("idle");
-        },
-        offsetMs + (at(last.startSec) + last.seconds / speed) * 1000 + 300,
-      );
-      timersRef.current.push(end);
+          return;
+        }
+        let k = shown;
+        while (k + 1 < starts.length && starts[k + 1] <= heardAt) k++;
+        if (k > shown) {
+          for (let j = Math.max(shown, 0); j < k; j++) score.color(from + j, COLORS.hit);
+          if (from + k > 0 && shown < 0) score.color(from + k - 1, COLORS.hit);
+          score.goToStep(from + k);
+          listenStepRef.current = from + k;
+          setStep(from + k);
+          setHeard(steps[k].midi);
+          shown = k;
+        }
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
     },
     [tempo, pianoOn, flute2On, pianoOnly],
   );

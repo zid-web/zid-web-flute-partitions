@@ -194,6 +194,54 @@ const ARTICULATIONS: Record<string, { gate?: number; accent?: number }> = {
 /** Soufflet sans nuance d'arrivée écrite : variation de force par défaut. */
 const WEDGE_STEP = 0.18;
 
+export interface MeasureTimeline {
+  /** Début de chaque mesure, en secondes au tempo écrit. */
+  startSec: number[];
+  /** Durée d'une noire dans chaque mesure. */
+  secPerQuarter: number[];
+}
+
+/**
+ * Calendrier des mesures, partagé par le son et le curseur : la durée d'une mesure est la plus
+ * longue de ses parties (voix et portées comprises), au tempo de la mesure. Le son (piano, flûtes)
+ * et le curseur placent leurs notes à partir des mêmes débuts de mesure : ils ne peuvent pas dériver.
+ */
+export function measureTimeline(xmlOrDoc: string | Document): MeasureTimeline {
+  const doc = typeof xmlOrDoc === "string" ? new DOMParser().parseFromString(xmlOrDoc, "application/xml") : xmlOrDoc;
+  const parts = children(doc.documentElement, "part");
+  const tempos = parts[0] ? partTempoMap(parts[0]) : [];
+  const lengths: number[] = [];
+  for (const part of parts) {
+    let divisions = 1;
+    children(part, "measure").forEach((measure, m) => {
+      let pos = 0;
+      let length = 0;
+      for (const el of Array.from(measure.children)) {
+        if (el.localName === "attributes") divisions = Number(text(el, "divisions")) || divisions;
+        else if (el.localName === "backup") pos -= Number(text(el, "duration") ?? 0) / divisions;
+        else if (el.localName === "forward") {
+          pos += Number(text(el, "duration") ?? 0) / divisions;
+          length = Math.max(length, pos);
+        } else if (el.localName === "note" && !child(el, "chord") && !child(el, "grace") && !child(el, "cue")) {
+          pos += Number(text(el, "duration") ?? 0) / divisions;
+          length = Math.max(length, pos);
+        }
+      }
+      lengths[m] = Math.max(lengths[m] ?? 0, length);
+    });
+  }
+  const startSec: number[] = [];
+  const secPerQuarter: number[] = [];
+  let t = 0;
+  lengths.forEach((quarters, m) => {
+    const spq = 60 / (tempos[m] ?? tempos[tempos.length - 1] ?? DEFAULT_QPM);
+    startSec.push(t);
+    secPerQuarter.push(spq);
+    t += quarters * spq;
+  });
+  return { startSec, secPerQuarter };
+}
+
 /**
  * Toutes les notes des parties demandées, dans l'ordre, avec leur interprétation : nuances
  * (et soufflets), articulations, liaisons, ornements. Accords, voix multiples (backup/forward),
@@ -204,8 +252,7 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   const root = doc.documentElement;
   const parts = children(root, "part").filter((p) => !partIds || partIds.includes(p.getAttribute("id") ?? ""));
-  const firstPart = children(root, "part")[0];
-  const tempos = firstPart ? partTempoMap(firstPart) : [];
+  const timeline = measureTimeline(doc);
   const notes: PianoNote[] = [];
   const ornaments = new Map<PianoNote, PendingOrnament>();
 
@@ -213,7 +260,6 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
     let divisions = 1;
     let fifths = 0;
     let velocity = DEFAULT_VELOCITY;
-    let measureStartSec = 0;
     let openSlurs = 0;
     // Soufflet en cours : notes concernées et force de départ.
     // `stopped` : fin du soufflet écrite ; la nuance d'arrivée, souvent écrite juste après, le termine.
@@ -232,10 +278,10 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
       wedge = null;
     };
     children(part, "measure").forEach((measure, m) => {
-      const secPerQuarter = 60 / (tempos[m] ?? tempos[tempos.length - 1] ?? DEFAULT_QPM);
+      const secPerQuarter = timeline.secPerQuarter[m];
+      const measureStartSec = timeline.startSec[m];
       let pos = 0; // en noires depuis le début de la mesure
       let lastStart = 0;
-      let length = 0;
       for (const el of Array.from(measure.children)) {
         if (el.localName === "attributes") {
           divisions = Number(text(el, "divisions")) || divisions;
@@ -262,7 +308,6 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
           pos -= Number(text(el, "duration") ?? 0) / divisions;
         } else if (el.localName === "forward") {
           pos += Number(text(el, "duration") ?? 0) / divisions;
-          length = Math.max(length, pos);
         } else if (el.localName === "note") {
           if (child(el, "grace") || child(el, "cue")) continue;
           if (wedge?.stopped) endWedge(); // soufflet fini sans nuance d'arrivée écrite
@@ -272,7 +317,6 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
           if (!isChord) {
             lastStart = pos;
             pos += quarters;
-            length = Math.max(length, pos);
           }
           const pitch = child(el, "pitch");
           if (child(el, "rest") || !pitch) continue;
@@ -316,7 +360,6 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
           if (ties.includes("start")) tied.set(midi, note);
         }
       }
-      measureStartSec += length * secPerQuarter;
     });
     endWedge(); // soufflet resté ouvert en fin de partie
   }
