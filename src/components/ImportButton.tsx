@@ -23,9 +23,9 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
     setStatus({ kind: "busy" });
     try {
       const { entry, xml, warnings } = prepareImport(await readScoreFile(file), file.name);
-      await saveUserScore(entry, xml);
+      const saved = await saveUserScore(entry, xml);
       setStatus({ kind: "done", entry, warnings });
-      onImported(entry);
+      onImported(saved);
     } catch (e) {
       setStatus({ kind: "error", message: e instanceof Error ? e.message : "Import impossible." });
     }

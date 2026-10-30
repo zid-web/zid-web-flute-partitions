@@ -38,15 +38,18 @@ async function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRe
 export async function listUserScores(): Promise<CatalogEntry[]> {
   try {
     const all = await run<StoredScore[]>("readonly", (s) => s.getAll());
-    return all.sort((a, b) => b.addedAt - a.addedAt).map((s) => s.entry);
+    return all.sort((a, b) => b.addedAt - a.addedAt).map((s) => ({ ...s.entry, addedAt: s.addedAt }));
   } catch {
     // Navigation privée / stockage bloqué : pas de partitions personnelles, l'app reste utilisable.
     return [];
   }
 }
 
-export async function saveUserScore(entry: CatalogEntry, xml: string): Promise<void> {
-  await run("readwrite", (s) => s.put({ entry, xml, addedAt: Date.now() } satisfies StoredScore));
+/** Enregistre la partition et la renvoie avec sa date d'import. */
+export async function saveUserScore(entry: CatalogEntry, xml: string): Promise<CatalogEntry> {
+  const addedAt = Date.now();
+  await run("readwrite", (s) => s.put({ entry, xml, addedAt } satisfies StoredScore));
+  return { ...entry, addedAt };
 }
 
 export async function deleteUserScore(id: string): Promise<void> {

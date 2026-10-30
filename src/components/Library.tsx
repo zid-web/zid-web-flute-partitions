@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
 import type { PieceProgress } from "../lib/progress";
+import { groupHeadings, loadSortKey, saveSortKey, SORT_LABELS, sortEntries, type SortKey } from "../lib/sortScores";
 import { ImportButton } from "./ImportButton";
 
 interface Props {
@@ -8,27 +9,62 @@ interface Props {
   progress: Record<string, PieceProgress>;
   onOpen: (entry: CatalogEntry) => void;
   onImported: (entry: CatalogEntry) => void;
-  onDelete: (entry: CatalogEntry) => void;
+  onDelete: (entries: CatalogEntry[]) => void;
 }
 
 const LEVELS = [1, 2, 3, 4, 5] as const;
+const SORT_KEYS = Object.keys(SORT_LABELS) as SortKey[];
+const dateFormat = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" });
 
 export function Library({ catalog, progress, onOpen, onImported, onDelete }: Props) {
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
   const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>(loadSortKey);
+  // Mode « Supprimer plusieurs » : on coche des partitions importées au lieu de les ouvrir.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const mineCount = catalog.filter((e) => e.origin === "import").length;
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return catalog
-      .filter((e) => !mineOnly || e.origin === "import")
+    const filtered = catalog
+      .filter((e) => !(mineOnly || selecting) || e.origin === "import")
       .filter((e) => level === 0 || e.level === level)
-      .filter((e) => !q || `${e.title} ${e.composer}`.toLowerCase().includes(q))
-      .sort((a, b) => a.level - b.level || a.complexity - b.complexity);
-  }, [catalog, level, mineOnly, query]);
+      .filter((e) => !q || `${e.title} ${e.composer}`.toLowerCase().includes(q));
+    return sortEntries(filtered, sortKey);
+  }, [catalog, level, mineOnly, selecting, query, sortKey]);
+  const headings = useMemo(() => groupHeadings(shown, sortKey), [shown, sortKey]);
 
   const totalStars = Object.values(progress).reduce((s, p) => s + p.stars, 0);
+
+  function changeSort(key: SortKey) {
+    setSortKey(key);
+    saveSortKey(key);
+  }
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function stopSelecting() {
+    setSelecting(false);
+    setSelected(new Set());
+  }
+
+  function deleteSelected() {
+    const entries = shown.filter((e) => selected.has(e.id));
+    if (entries.length === 0) return;
+    const what = entries.length === 1 ? `« ${entries[0].title} »` : `ces ${entries.length} partitions`;
+    if (!window.confirm(`Supprimer ${what} de cet appareil ?`)) return;
+    onDelete(entries);
+    stopSelecting();
+  }
 
   return (
     <main className="library">
@@ -58,6 +94,10 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
             <b>📥 Importer une partition</b> : un fichier MusicXML (.mxl, .musicxml) téléchargé sur IMSLP ou ailleurs.
             Il reste sur cet appareil et fonctionne hors ligne.
           </li>
+          <li>
+            <b>Ranger</b> : « Trier par » classe les morceaux par niveau, date d'import, compositeur ou titre.
+            <b> 🗑 Supprimer…</b> permet d'effacer plusieurs partitions importées d'un coup.
+          </li>
         </ol>
       </details>
 
@@ -84,58 +124,113 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
         />
       </div>
 
-      <ImportButton
-        onImported={(entry) => {
-          setMineOnly(false);
-          setLevel(0);
-          onImported(entry);
-        }}
-      />
+      <div className="arrange">
+        <label className="sort">
+          Trier par
+          <select value={sortKey} onChange={(e) => changeSort(e.target.value as SortKey)}>
+            {SORT_KEYS.map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {mineCount > 0 &&
+          (selecting ? (
+            <div className="select-bar" role="toolbar" aria-label="Suppression de partitions importées">
+              <button
+                className="chip"
+                onClick={() =>
+                  setSelected(selected.size === shown.length ? new Set() : new Set(shown.map((e) => e.id)))
+                }
+              >
+                {selected.size === shown.length && shown.length > 0 ? "Tout désélectionner" : "Tout sélectionner"}
+              </button>
+              <button className="danger" disabled={selected.size === 0} onClick={deleteSelected}>
+                🗑 Supprimer ({selected.size})
+              </button>
+              <button className="ghost" onClick={stopSelecting}>
+                Annuler
+              </button>
+            </div>
+          ) : (
+            <button className="ghost" onClick={() => setSelecting(true)}>
+              🗑 Supprimer…
+            </button>
+          ))}
+      </div>
+      {selecting && <p className="select-hint">Touchez les partitions importées à supprimer.</p>}
+
+      {!selecting && (
+        <ImportButton
+          onImported={(entry) => {
+            setMineOnly(false);
+            setLevel(0);
+            onImported(entry);
+          }}
+        />
+      )}
 
       <ul className="cards">
-        {shown.map((e) => {
+        {shown.map((e, i) => {
           const stars = progress[e.id]?.stars ?? 0;
+          const checked = selected.has(e.id);
           return (
-            <li key={e.id} className="card-slot">
-              <button className={`card lvl${e.level}`} onClick={() => onOpen(e)}>
-                <span className="level-badge">
-                  Niveau {e.level} · {LEVEL_LABELS[e.level]}
-                  {e.origin === "import" && <span className="mine-badge">importée</span>}
-                  {e.origin === "omr" && (
-                    <span className="mine-badge" title="Reconnue automatiquement à partir d'un PDF scanné">
-                      🔍 reconnue
+            <Fragment key={e.id}>
+              {headings[i] && <li className="group-heading">{headings[i]}</li>}
+              <li className="card-slot">
+                <button
+                  className={`card lvl${e.level}${selecting ? " selectable" : ""}${checked ? " selected" : ""}`}
+                  onClick={() => (selecting ? toggle(e.id) : onOpen(e))}
+                  aria-pressed={selecting ? checked : undefined}
+                >
+                  {selecting && (
+                    <span className="check" aria-hidden>
+                      {checked ? "☑" : "☐"}
                     </span>
                   )}
-                </span>
-                <strong className="title">{e.title}</strong>
-                <span className="composer">{e.composer}</span>
-                <span className="meta">
-                  {e.key && <>🎼 {e.key} </>}
-                  {e.time && <>· {e.time} </>}
-                  {e.range && (
-                    <>
-                      · {e.range.low}–{e.range.high}
-                    </>
+                  <span className="level-badge">
+                    Niveau {e.level} · {LEVEL_LABELS[e.level]}
+                    {e.origin === "import" && <span className="mine-badge">importée</span>}
+                    {e.origin === "omr" && (
+                      <span className="mine-badge" title="Reconnue automatiquement à partir d'un PDF scanné">
+                        🔍 reconnue
+                      </span>
+                    )}
+                  </span>
+                  <strong className="title">{e.title}</strong>
+                  <span className="composer">{e.composer}</span>
+                  <span className="meta">
+                    {e.key && <>🎼 {e.key} </>}
+                    {e.time && <>· {e.time} </>}
+                    {e.range && (
+                      <>
+                        · {e.range.low}–{e.range.high}
+                      </>
+                    )}
+                  </span>
+                  {e.addedAt !== undefined && (
+                    <span className="added">Importée le {dateFormat.format(e.addedAt)}</span>
                   )}
-                </span>
-                <span className="complexity" aria-label={`Complexité ${e.complexity} sur 100`}>
-                  <span style={{ width: `${e.complexity}%` }} />
-                </span>
-                <span className="stars">{[1, 2, 3].map((i) => (i <= stars ? "★" : "☆")).join("")}</span>
-              </button>
-              {e.origin === "import" && (
-                <button
-                  className="delete"
-                  aria-label={`Supprimer ${e.title}`}
-                  title="Supprimer de cet appareil"
-                  onClick={() => {
-                    if (window.confirm(`Supprimer « ${e.title} » de cet appareil ?`)) onDelete(e);
-                  }}
-                >
-                  ✕
+                  <span className="complexity" aria-label={`Complexité ${e.complexity} sur 100`}>
+                    <span style={{ width: `${e.complexity}%` }} />
+                  </span>
+                  <span className="stars">{[1, 2, 3].map((n) => (n <= stars ? "★" : "☆")).join("")}</span>
                 </button>
-              )}
-            </li>
+                {e.origin === "import" && !selecting && (
+                  <button
+                    className="delete"
+                    aria-label={`Supprimer ${e.title}`}
+                    title="Supprimer de cet appareil"
+                    onClick={() => {
+                      if (window.confirm(`Supprimer « ${e.title} » de cet appareil ?`)) onDelete([e]);
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </li>
+            </Fragment>
           );
         })}
         {shown.length === 0 && <li className="message">Aucun morceau pour ce filtre.</li>}
