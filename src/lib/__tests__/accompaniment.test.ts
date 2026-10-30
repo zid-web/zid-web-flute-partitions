@@ -71,3 +71,42 @@ describe("notes du piano", () => {
     expect(d.find((x) => x.midi === 74)?.startSec).toBe(5); // mesure 2 à ♩ = 120 : 2 noires = 1 s
   });
 });
+
+describe("ornements joués par le piano", () => {
+  const piece = (body: string, fifths = 0) => `<?xml version="1.0"?><score-partwise><part-list>
+<score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1">
+<measure number="1"><attributes><divisions>2</divisions><key><fifths>${fifths}</fifths></key></attributes><sound tempo="60"/>${body}</measure>
+</part></score-partwise>`;
+  const orn = (inner: string) => `<notations><ornaments>${inner}</ornaments></notations>`;
+
+  it("trille : alternance avec la note du dessus dans la tonalité, sur toute la durée", () => {
+    // La4 blanche en Fa majeur (si♭) : trille La / Si♭
+    const notes = pianoNotes(piece(n("A", 4, 4, orn("<trill-mark/>")), -1));
+    expect(new Set(notes.map((x) => x.midi))).toEqual(new Set([69, 70]));
+    expect(notes[0].midi).toBe(69); // commence sur la note principale
+    expect(notes.length % 2).toBe(0);
+    expect(notes.length).toBeGreaterThanOrEqual(20); // ~14 notes par seconde sur 2 s
+    const end = notes[notes.length - 1];
+    expect(end.startSec + end.seconds).toBeCloseTo(2, 6); // dure toute la blanche
+  });
+
+  it("trille sur une note liée : dure toute la note liée", () => {
+    const body = n("A", 4, 4, `<tie type="start"/>${orn("<trill-mark/>")}`) + n("A", 4, 4, '<tie type="stop"/>');
+    const notes = pianoNotes(piece(body));
+    const end = notes[notes.length - 1];
+    expect(end.startSec + end.seconds).toBeCloseTo(4, 6);
+    expect(notes.filter((x) => x.midi === 71).length).toBeGreaterThan(10); // La / Si
+  });
+
+  it("altération écrite sur la trille, mordant, mordant inversé, gruppetto", () => {
+    const sharp = pianoNotes(piece(n("F", 4, 4, orn("<trill-mark/><accidental-mark>sharp</accidental-mark>"))));
+    expect(new Set(sharp.map((x) => x.midi))).toEqual(new Set([65, 68])); // Fa / Sol♯
+    expect(pianoNotes(piece(n("C", 5, 4, orn("<mordent/>")))).map((x) => x.midi)).toEqual([72, 71, 72]);
+    expect(pianoNotes(piece(n("C", 5, 4, orn("<inverted-mordent/>")))).map((x) => x.midi)).toEqual([72, 74, 72]);
+    expect(pianoNotes(piece(n("C", 5, 4, orn("<turn/>")))).map((x) => x.midi)).toEqual([74, 72, 71, 72]);
+  });
+
+  it("une note sans ornement ne change pas", () => {
+    expect(pianoNotes(piece(n("C", 5, 4))).map((x) => [x.midi, x.seconds])).toEqual([[72, 2]]);
+  });
+});
