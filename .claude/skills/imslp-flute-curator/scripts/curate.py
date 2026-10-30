@@ -403,23 +403,123 @@ def pick_flute_part(root: ET.Element, omr: bool = False) -> str | None:
     return None
 
 
-def extract_flute_part(src: Path, dest: Path, omr: bool = False) -> bool:
-    """Écrit une partition à une seule partie (la flûte). False si aucune flûte trouvée."""
-    root = read_root(src)
-    keep = pick_flute_part(root, omr)
-    if not keep:
-        return False
+PIANO = re.compile(r"piano|pianoforte|klavier|clavier|keyboard|harpsi|cembal|clavecin|continuo|organ|orgue", re.I)
+BEAT_UNIT_QUARTERS = {"breve": 8, "whole": 4, "half": 2, "quarter": 1, "eighth": 0.5, "16th": 0.25, "32nd": 0.125}
+
+
+def part_names(root: ET.Element) -> dict[str, str]:
+    return {sp.get("id"): (sp.findtext("part-name") or "") + " " + (sp.findtext("score-instrument/instrument-name") or "")
+            for sp in root.iter("score-part")}
+
+
+def keep_parts(root: ET.Element, ids: list[str]) -> ET.Element:
+    """Copie de la partition ne gardant que les parties demandées."""
     new = copy.deepcopy(root)
     for p in new.findall("part"):
-        if p.get("id") != keep:
+        if p.get("id") not in ids:
             new.remove(p)
     pl = new.find("part-list")
     if pl is not None:
         for el in list(pl):
-            if el.tag == "score-part" and el.get("id") != keep or el.tag == "part-group":
+            if el.tag == "score-part" and el.get("id") not in ids or el.tag == "part-group":
                 pl.remove(el)
-    dest.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(new, encoding="utf-8"))
-    return True
+    return new
+
+
+def tempo_map(part: ET.Element) -> list[float | None]:
+    """Tempo (noires par minute) au début de chaque mesure, comme MuseScore (même règle que src/lib/tempo.ts)."""
+    out: list[float | None] = []
+    current = None
+    for measure in part.findall("measure"):
+        found = None
+        for sound in measure.iter("sound"):
+            if sound.get("tempo"):
+                found = float(sound.get("tempo"))
+                break
+        if found is None:
+            for met in measure.iter("metronome"):
+                unit = BEAT_UNIT_QUARTERS.get((met.findtext("beat-unit") or "").strip())
+                m = re.search(r"\d+(\.\d+)?", met.findtext("per-minute") or "")
+                if unit and m:
+                    dots = len(met.findall("beat-unit-dot"))
+                    found = float(m.group()) * unit * (2 - 1 / 2 ** dots)
+                    break
+        current = found if found is not None else current
+        out.append(current)
+    return out
+
+
+def copy_tempo(tempos: list[float | None], part: ET.Element) -> None:
+    """MuseScore n'écrit le tempo que dans la première partie : on le recopie dans une partie gardée
+    qui n'en a pas, pour que flûte et accompagnement restent ensemble."""
+    if any(s.get("tempo") for s in part.iter("sound")) or part.find(".//metronome") is not None:
+        return
+    previous = None
+    for measure, qpm in zip(part.findall("measure"), tempos):
+        if qpm is not None and qpm != previous:
+            measure.insert(0, ET.Element("sound", {"tempo": f"{qpm:g}"}))
+        previous = qpm
+
+
+def accompaniment_parts(root: ET.Element, keep: str, omr: bool = False) -> tuple[list[str], list[str]]:
+    """Parties à jouer par l'application avec la flûte gardée : (pianos, autres flûtes).
+    Pour une OMR (portées « Voice »…), une autre partie à une portée est la 2ᵉ flûte d'un duo."""
+    names = part_names(root)
+    pianos, flutes = [], []
+    for part in root.findall("part"):
+        pid = part.get("id")
+        if pid == keep:
+            continue
+        name = names.get(pid, "")
+        staves = {s.text for s in part.iter("staves")}
+        if FLUTE.search(name):
+            flutes.append(pid)
+        elif PIANO.search(name) or any(int(v or 1) >= 2 for v in staves):
+            pianos.append(pid)
+        elif omr and not ACCOMPANIMENT.search(name) and staves <= {"1"}:
+            flutes.append(pid)
+    return pianos, flutes
+
+
+def write_xml(root: ET.Element, dest: Path) -> None:
+    dest.write_bytes(b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8"))
+
+
+def extract_flute_part(src: Path, dest: Path, omr: bool = False, accompaniment: Path | None = None) -> str | None:
+    """Écrit une partition à une seule partie (la flûte) ; renvoie son identifiant (None si aucune flûte).
+    Avec `accompaniment` : y écrit aussi le piano et les autres flûtes (2ᵉ flûte d'un duo), que
+    l'application joue avec vous ; rien n'est écrit s'il n'y en a pas."""
+    root = read_root(src)
+    keep = pick_flute_part(root, omr)
+    if not keep:
+        return None
+    first = root.find("part")
+    tempos = tempo_map(first) if first is not None else []
+    flute = keep_parts(root, [keep])
+    copy_tempo(tempos, flute.find("part"))
+    write_xml(flute, dest)
+    if accompaniment is not None:
+        pianos, flutes = accompaniment_parts(root, keep, omr)
+        accompaniment.unlink(missing_ok=True)
+        if pianos or flutes:
+            acc = keep_parts(root, pianos + flutes)
+            copy_tempo(tempos, acc.find("part"))
+            write_xml(acc, accompaniment)
+    return keep
+
+
+def partners_of(path: Path) -> list[str]:
+    """Instruments d'un fichier d'accompagnement : « piano » et/ou « flute » (2ᵉ flûte)."""
+    if not path.exists():
+        return []
+    root = read_root(path)
+    names = part_names(root)
+    kinds = set()
+    for part in root.findall("part"):
+        name = names.get(part.get("id"), "")
+        two_staves = any(int(v.text or 1) >= 2 for v in part.iter("staves"))
+        kinds.add("piano" if not FLUTE.search(name) and (PIANO.search(name) or two_staves) else "flute")
+    return [k for k in ("piano", "flute") if k in kinds]
 
 
 OMR_MIN_RHYTHM = 0.85
@@ -510,7 +610,8 @@ def cmd_analyse(args) -> None:
         dest = flutes / f"{src.stem}.musicxml"
         m = meta.get(src.stem.split(".")[0], {})
         try:
-            if not extract_flute_part(src, dest, omr=origin == "omr"):
+            accomp = flutes / f"{src.stem}.accomp.musicxml"
+            if not extract_flute_part(src, dest, omr=origin == "omr", accompaniment=accomp):
                 print(f"  · pas de partie de flûte : {src.name}")
                 continue
             if m.get("work"):
@@ -535,6 +636,7 @@ def cmd_analyse(args) -> None:
             "sourceUrl": m.get("url"), "license": m.get("copyright") or "Domaine public",
             "imslpWork": m.get("work"), "problems": problems, "rhythm": rhythm, "source": m.get("source", "IMSLP"),
             "needsReview": bool(problems),
+            "accompaniment": str(accomp) if accomp.exists() else None, "partners": partners_of(accomp),
         })
         print(f"  ✓ niveau {a.level} ({a.complexity:3d}) {a.title} — {a.composer}{'  ⚠ ' + ', '.join(problems) if problems else ''}")
     results.sort(key=lambda r: (r["level"], r["complexity"]))
@@ -563,6 +665,11 @@ def cmd_publish(args) -> None:
         meta = {"id": r["id"], "title": r["title"], "composer": r["composer"], "file": target.name,
                 "source": r.get("source", "IMSLP"), "sourceUrl": r.get("sourceUrl"), "license": r["license"], "origin": r["origin"],
                 "imslpWork": r.get("imslpWork")}
+        # Piano et/ou 2ᵉ flûte : joués par l'application pendant que l'élève joue la 1ʳᵉ flûte.
+        if r.get("accompaniment") and Path(r["accompaniment"]).exists():
+            accomp = SCORES / f"{r['id']}.accomp.musicxml"
+            shutil.copyfile(r["accompaniment"], accomp)
+            meta |= {"accompanimentFile": accomp.name, "partners": r.get("partners", [])}
         (SCORES / f"{r['id']}.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         published.append(r)
         print(f"  → {target}")
@@ -599,6 +706,9 @@ def write_summary(published: list[dict], rows: list[dict]) -> None:
             src = f"[IMSLP]({r['sourceUrl']})" if r.get("sourceUrl") else "—"
             origin = (f"🔍 reconnue ({round(r.get('rhythm', 0) * 100)} % mesures justes)"
                       if r["origin"] == "omr" else "MusicXML")
+            with_ = {"piano": "🎹 piano", "flute": "🎶 2ᵉ flûte"}
+            if r.get("partners"):
+                origin += " + " + " et ".join(with_[k] for k in r["partners"])
             lines.append(f"| {r['level']} | {r['complexity']} | {r['title']} | {r['composer']} | "
                          f"{r['low']}–{r['high']} | {origin} | {r['license']} | {src} |")
     inbox = WORK / "inbox.json"
@@ -645,6 +755,8 @@ def cmd_catalog(_args) -> None:
             **a.catalog_fields(), "file": meta["file"], "source": meta.get("source", ""),
             "sourceUrl": meta.get("sourceUrl"), "license": meta.get("license", "Domaine public"),
             "origin": meta.get("origin", "native"), "tags": meta.get("tags", []),
+            **({"accompanimentFile": meta["accompanimentFile"], "partners": meta.get("partners", [])}
+               if meta.get("accompanimentFile") else {}),
         })
     entries.sort(key=lambda e: (e["level"], e["complexity"]))
     (SCORES / "catalog.json").write_text(json.dumps({"version": 1, "scores": entries}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

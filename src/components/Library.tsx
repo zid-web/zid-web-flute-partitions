@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useRef, useState } from "react";
+import { partnersOf } from "../lib/accompaniment";
 import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
 import type { PieceProgress } from "../lib/progress";
 import { groupHeadings, loadSortKey, saveSortKey, SORT_LABELS, sortEntries, type SortKey } from "../lib/sortScores";
@@ -28,6 +29,7 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
   const [mineOnly, setMineOnly] = useState(false);
   const [pianoFilter, setPianoFilter] = useState(false);
+  const [duoFilter, setDuoFilter] = useState(false);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>(loadSortKey);
   // Mode « Supprimer plusieurs » : on coche des partitions importées au lieu de les ouvrir.
@@ -35,17 +37,21 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const mineCount = catalog.filter((e) => e.origin === "import").length;
   // Partitions avec une partie de piano (accompagnement ou piano seul), repérées à l'import.
-  const pianoCount = catalog.filter((e) => e.kind === "flute-piano" || e.kind === "piano").length;
+  const withPiano = (e: CatalogEntry) => e.kind === "piano" || partnersOf(e).includes("piano");
+  const isDuo = (e: CatalogEntry) => partnersOf(e).includes("flute");
+  const pianoCount = catalog.filter(withPiano).length;
+  const duoCount = catalog.filter(isDuo).length;
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = catalog
       .filter((e) => !(mineOnly || selecting) || e.origin === "import")
-      .filter((e) => !pianoFilter || e.kind === "flute-piano" || e.kind === "piano")
+      .filter((e) => !pianoFilter || withPiano(e))
+      .filter((e) => !duoFilter || isDuo(e))
       .filter((e) => level === 0 || e.level === level)
       .filter((e) => !q || `${e.title} ${e.composer}`.toLowerCase().includes(q));
     return sortEntries(filtered, sortKey);
-  }, [catalog, level, mineOnly, pianoFilter, selecting, query, sortKey]);
+  }, [catalog, level, mineOnly, pianoFilter, duoFilter, selecting, query, sortKey]);
   const headings = useMemo(() => groupHeadings(shown, sortKey), [shown, sortKey]);
 
   const totalStars = Object.values(progress).reduce((s, p) => s + p.stars, 0);
@@ -110,7 +116,8 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
           <li>
             <b>📥 Importer une partition</b> : un fichier MusicXML (.mxl, .musicxml) téléchargé sur IMSLP ou ailleurs.
             Il reste sur cet appareil et fonctionne hors ligne. Une partie de piano est repérée et gardée : 🎹 le
-            piano vous accompagne ; une partition pour piano seul s'écoute au piano.
+            piano vous accompagne ; une partition pour piano seul s'écoute au piano. Dans un duo de flûtes, vous jouez la 1ʳᵉ
+            flûte et l'application joue la 2ᵉ.
           </li>
           <li>
             <b>Ranger</b> : « Trier par » classe les morceaux par niveau, date d'import, compositeur ou titre.
@@ -144,6 +151,11 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
         {pianoCount > 0 && (
           <button className={pianoFilter ? "chip active" : "chip"} onClick={() => setPianoFilter((p) => !p)}>
             🎹 Avec piano ({pianoCount})
+          </button>
+        )}
+        {duoCount > 0 && (
+          <button className={duoFilter ? "chip active" : "chip"} onClick={() => setDuoFilter((d) => !d)}>
+            🎶 Duos de flûtes ({duoCount})
           </button>
         )}
         <input
@@ -262,9 +274,14 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
                   <span className="level-badge">
                     Niveau {e.level} · {LEVEL_LABELS[e.level]}
                     {e.origin === "import" && <span className="mine-badge">importée</span>}
-                    {e.kind === "flute-piano" && (
+                    {partnersOf(e).includes("piano") && (
                       <span className="mine-badge" title="Flûte accompagnée au piano">
                         🎹 avec piano
+                      </span>
+                    )}
+                    {partnersOf(e).includes("flute") && (
+                      <span className="mine-badge" title="Duo : vous jouez la 1ʳᵉ flûte, l'application la 2ᵉ">
+                        🎶 duo de flûtes
                       </span>
                     )}
                     {e.kind === "piano" && (

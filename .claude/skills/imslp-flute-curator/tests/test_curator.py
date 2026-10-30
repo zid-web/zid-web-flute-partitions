@@ -81,6 +81,39 @@ class CuratorTest(unittest.TestCase):
             self.assertEqual([m.get("number") for m in root.iter("measure")], ["1", "2"])
             self.assertEqual([s.text for s in root.iter("step")], ["A", "B"])
 
+    def test_duo_keeps_second_flute_and_piano_with_tempo(self):
+        note = lambda step: f"<note><pitch><step>{step}</step><octave>5</octave></pitch><duration>4</duration></note>"
+        xml = f"""<?xml version="1.0"?><score-partwise><part-list>
+<score-part id="P1"><part-name>Piano</part-name></score-part>
+<score-part id="P2"><part-name>Flûte 1</part-name></score-part>
+<score-part id="P3"><part-name>Flûte 2</part-name></score-part></part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions><staves>2</staves></attributes><sound tempo="72"/>{note("C")}</measure>
+<measure number="2"><sound tempo="96"/>{note("C")}</measure></part>
+<part id="P2"><measure number="1"><attributes><divisions>1</divisions></attributes>{note("A")}</measure><measure number="2">{note("A")}</measure></part>
+<part id="P3"><measure number="1"><attributes><divisions>1</divisions></attributes>{note("F")}</measure><measure number="2">{note("F")}</measure></part>
+</score-partwise>"""
+        with tempfile.TemporaryDirectory() as d:
+            src, dest, acc = Path(d, "duo.xml"), Path(d, "f.musicxml"), Path(d, "f.accomp.musicxml")
+            src.write_text(xml)
+            self.assertEqual(extract_flute_part(src, dest, accompaniment=acc), "P2")
+            flute = read_root(dest)
+            self.assertEqual([p.get("id") for p in flute.findall("part")], ["P2"])
+            self.assertEqual(curate.tempo_map(flute.find("part")), [72, 96])  # tempo recopié depuis le piano
+            accomp = read_root(acc)
+            self.assertEqual([p.get("id") for p in accomp.findall("part")], ["P1", "P3"])
+            self.assertEqual(curate.partners_of(acc), ["piano", "flute"])
+            # Duo reconnu par OMR : deux portées « Voice » → la 2ᵉ est la 2ᵉ flûte
+            omr = xml.replace("Flûte 1", "Voice").replace("Flûte 2", "Voice").replace("<part-name>Piano</part-name>", "<part-name>Piano</part-name>")
+            src.write_text(omr.replace('<score-part id="P1"><part-name>Piano</part-name></score-part>', "").replace(
+                xml[xml.index('<part id="P1">'):xml.index('<part id="P2">')], ""))
+            self.assertEqual(extract_flute_part(src, dest, omr=True, accompaniment=acc), "P2")
+            self.assertEqual(curate.partners_of(acc), ["flute"])
+            # Flûte seule : pas de fichier d'accompagnement
+            solo = Path(d, "solo.xml")
+            solo.write_text(DUET.replace('<part id="P2"><measure number="1"><note><pitch><step>C</step><octave>3</octave></pitch><duration>1</duration></note></measure></part>', "").replace('<score-part id="P2"><part-name>Piano</part-name></score-part>', ""))
+            extract_flute_part(solo, dest, accompaniment=acc)
+            self.assertFalse(acc.exists())
+
     def test_levels_are_ordered(self):
         easy = analyse(ROOT / "public/scores/au-clair-de-la-lune.musicxml")
         harder = analyse(ROOT / "public/scores/menuet-en-sol.musicxml")

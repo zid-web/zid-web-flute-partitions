@@ -15,7 +15,9 @@ export function isNativeApp(): boolean {
 
 /** Empreinte d'une entrée : si elle change, la partition est retéléchargée. */
 export function signature(e: CatalogEntry): string {
-  return JSON.stringify([e.file, e.title, e.composer, e.level, e.complexity, e.noteCount, e.license]);
+  const base = [e.file, e.title, e.composer, e.level, e.complexity, e.noteCount, e.license];
+  // L'accompagnement n'entre dans l'empreinte que s'il existe : pas de re-téléchargement des autres morceaux.
+  return JSON.stringify(e.accompanimentFile ? [...base, e.accompanimentFile] : base);
 }
 
 export interface SyncPlan {
@@ -53,6 +55,8 @@ interface StoredScore {
   id: string;
   signature: string;
   xml: string;
+  /** Piano et/ou 2ᵉ flûte, quand le morceau en a. */
+  accompaniment?: string;
 }
 
 function open(): Promise<IDBDatabase> {
@@ -100,6 +104,16 @@ export async function syncedScoreXml(id: string): Promise<string | null> {
   }
 }
 
+/** Accompagnement d'un morceau téléchargé (null si absent ou hors application native). */
+export async function syncedAccompanimentXml(id: string): Promise<string | null> {
+  if (!isNativeApp()) return null;
+  try {
+    return (await tx<StoredScore | undefined>(SCORES, "readonly", (s) => s.get(id)))?.accompaniment ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Synchronise le contenu ; renvoie le nouveau catalogue si quelque chose a changé. */
 export async function syncContent(bundled: CatalogEntry[]): Promise<{ catalog: CatalogEntry[]; added: CatalogEntry[] } | null> {
   if (!isNativeApp() || !navigator.onLine) return null;
@@ -114,7 +128,15 @@ export async function syncContent(bundled: CatalogEntry[]): Promise<{ catalog: C
     const r = await fetch(`${CONTENT_URL}/scores/${entry.file}`, { cache: "no-store" });
     if (!r.ok) continue; // réessayé à la prochaine synchronisation
     const xml = await r.text();
-    await tx(SCORES, "readwrite", (s) => s.put({ id: entry.id, signature: signature(entry), xml } satisfies StoredScore));
+    let accompaniment: string | undefined;
+    if (entry.accompanimentFile) {
+      const a = await fetch(`${CONTENT_URL}/scores/${entry.accompanimentFile}`, { cache: "no-store" });
+      if (!a.ok) continue; // morceau incomplet : réessayé à la prochaine synchronisation
+      accompaniment = await a.text();
+    }
+    await tx(SCORES, "readwrite", (s) =>
+      s.put({ id: entry.id, signature: signature(entry), xml, accompaniment } satisfies StoredScore),
+    );
     stored[entry.id] = signature(entry);
   }
   for (const id of plan.removed) await tx(SCORES, "readwrite", (s) => s.delete(id));

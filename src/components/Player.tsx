@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pianoNotes, type PianoNote } from "../lib/accompaniment";
-import { LEVEL_LABELS, loadScoreXml, type CatalogEntry } from "../lib/catalog";
+import { pianoNotes, splitAccompaniment, type PianoNote } from "../lib/accompaniment";
+import { LEVEL_LABELS, loadAccompanimentXml, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
 import { MicPitchSource } from "../lib/pitch";
@@ -10,7 +10,6 @@ import { isMyFluteEnabled, listTakes } from "../lib/myFlute";
 import { PianoSampler } from "../lib/piano";
 import { SampledFlute, type FlutePlayer } from "../lib/sampler";
 import { FluteSynth } from "../lib/synth";
-import { getUserScoreAccompaniment } from "../lib/userScores";
 import { Fingering } from "./Fingering";
 
 interface Props {
@@ -35,6 +34,8 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const audioRef = useRef<{ ctx: AudioContext; flute: Promise<FlutePlayer>; piano?: Promise<PianoSampler | null> } | null>(null);
   const pianoRef = useRef<PianoSampler | null>(null);
   const pianoNotesRef = useRef<PianoNote[]>([]);
+  // 2ᵉ flûte d'un duo : jouée par l'application (même son de flûte), pendant que vous jouez la 1ʳᵉ.
+  const flute2NotesRef = useRef<PianoNote[]>([]);
   const pianoOnly = entry.kind === "piano";
   const timersRef = useRef<number[]>([]);
 
@@ -58,6 +59,8 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   // Partie de piano : accompagnement (flûte + piano) ou partition pour piano seul.
   const [hasPiano, setHasPiano] = useState(false);
   const [pianoOn, setPianoOn] = useState(true);
+  const [hasFlute2, setHasFlute2] = useState(false);
+  const [flute2On, setFlute2On] = useState(true);
 
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
@@ -75,11 +78,21 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     setLoading(true);
     loadScoreXml(entry)
       .then(async (xml) => {
-        // Notes de piano : la partie gardée à l'import (flûte + piano), ou toute la partition (piano seul).
-        const accompaniment =
-          entry.kind === "piano" ? xml : entry.kind === "flute-piano" ? await getUserScoreAccompaniment(entry.id) : null;
-        pianoNotesRef.current = accompaniment ? pianoNotes(accompaniment) : [];
-        if (!cancelled) setHasPiano(pianoNotesRef.current.length > 0);
+        // Parties jouées par l'application : toute la partition (piano seul), ou l'accompagnement gardé
+        // à l'import ou publié avec le morceau (piano et/ou 2ᵉ flûte).
+        if (entry.kind === "piano") {
+          pianoNotesRef.current = pianoNotes(xml);
+          flute2NotesRef.current = [];
+        } else {
+          const accompaniment = await loadAccompanimentXml(entry).catch(() => null);
+          const parts = accompaniment ? splitAccompaniment(accompaniment) : { piano: [], flute: [] };
+          pianoNotesRef.current = parts.piano;
+          flute2NotesRef.current = parts.flute;
+        }
+        if (!cancelled) {
+          setHasPiano(pianoNotesRef.current.length > 0);
+          setHasFlute2(flute2NotesRef.current.length > 0);
+        }
         return controller.load(xml);
       })
       .then(() => {
@@ -210,22 +223,20 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   // jusqu'à votre note suivante (il vous suit, même si vous ralentissez).
   const accompanyRef = useRef<(index: number) => void>(() => {});
   accompanyRef.current = (index: number) => {
-    const piano = pianoRef.current;
     const score = scoreRef.current;
-    if (!piano || !pianoOn || !score) return;
-    const from = score.steps[index];
-    if (!from) return;
-    piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.01, {
-      origin: from.startSec,
-      until: score.steps[index + 1]?.startSec ?? Infinity,
-      speed: tempo / score.tempo,
-    });
+    const from = score?.steps[index];
+    if (!score || !from) return;
+    const window = { origin: from.startSec, until: score.steps[index + 1]?.startSec ?? Infinity, speed: tempo / score.tempo };
+    const piano = pianoRef.current;
+    if (piano && pianoOn) piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.01, window);
+    const flute = synthRef.current;
+    if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, flute.ctx.currentTime + 0.01, window);
   };
 
   const startMic = useCallback(async () => {
     restart();
     setMicError(null);
-    const accompanied = hasPiano && pianoOn;
+    const accompanied = (hasPiano && pianoOn) || (hasFlute2 && flute2On);
     if (accompanied) await ensureAudio();
     const mic = new MicPitchSource(
       (r) => {
@@ -244,13 +255,14 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       await mic.start();
       micRef.current = mic;
       setMode("mic");
-      // Introduction de piano (avant la première note de flûte), au tempo choisi.
+      // Introduction (avant votre première note), au tempo choisi : piano et/ou 2ᵉ flûte.
       const score = scoreRef.current;
-      if (accompanied && pianoRef.current && score?.steps[0]) {
-        pianoRef.current.schedule(pianoNotesRef.current, pianoRef.current.ctx.currentTime + 0.3, {
-          until: score.steps[0].startSec,
-          speed: tempo / score.tempo,
-        });
+      if (accompanied && score?.steps[0]) {
+        const intro = { until: score.steps[0].startSec, speed: tempo / score.tempo };
+        const piano = pianoRef.current;
+        if (piano && pianoOn) piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.3, intro);
+        const flute = synthRef.current;
+        if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, flute.ctx.currentTime + 0.3, intro);
       }
     } catch (e) {
       setMicError(
@@ -259,7 +271,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           : "Micro indisponible sur cet appareil.",
       );
     }
-  }, [handleEvents, restart, hasPiano, pianoOn, ensureAudio, tempo]);
+  }, [handleEvents, restart, hasPiano, pianoOn, hasFlute2, flute2On, ensureAudio, tempo]);
 
   /**
    * Mode Écouter : l'application joue le morceau à partir de la note `from`, et la partition défile.
@@ -286,6 +298,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
         : synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
       if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
+      if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, speed });
       const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
       steps.forEach((s, k) => {
         const i = from + k;
@@ -312,7 +325,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       );
       timersRef.current.push(end);
     },
-    [tempo, pianoOn, pianoOnly],
+    [tempo, pianoOn, flute2On, pianoOnly],
   );
 
   const startListen = useCallback(async () => {
@@ -421,6 +434,12 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
             🎹 Piano
           </label>
         )}
+        {hasFlute2 && !pianoOnly && (
+          <label className="toggle" title="Vous jouez la 1ʳᵉ flûte, l'application joue la 2ᵉ">
+            <input type="checkbox" checked={flute2On} onChange={(e) => setFlute2On(e.target.checked)} />
+            🎶 2ᵉ flûte
+          </label>
+        )}
         {!pianoOnly && (
           <label className="toggle">
             <input type="checkbox" checked={octaveTolerant} onChange={(e) => setOctaveTolerant(e.target.checked)} />
@@ -433,8 +452,12 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       {pianoOnly && (
         <p className="sound-note">🎹 Partition pour piano : appuyez sur « Écouter » pour l'entendre au piano.</p>
       )}
-      {hasPiano && !pianoOnly && pianoOn && mode === "mic" && (
-        <p className="sound-note">🎹 Le piano vous accompagne et suit votre jeu. Avec un casque, il ne gêne pas le micro.</p>
+      {mode === "mic" && ((hasPiano && pianoOn) || (hasFlute2 && flute2On)) && (
+        <p className="sound-note">
+          {hasFlute2 && flute2On ? "🎶 Vous jouez la 1ʳᵉ flûte, l'application la 2ᵉ" : "🎹 Le piano vous accompagne"}
+          {hasPiano && pianoOn && hasFlute2 && flute2On ? " avec le piano" : ""} : elle suit votre jeu. Un casque est
+          conseillé pour que le micro n'entende que vous.
+        </p>
       )}
       {entry.origin === "omr" && (
         <p className="omr-note">

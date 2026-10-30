@@ -1,3 +1,4 @@
+import type { PianoNote } from "./accompaniment";
 import { MY_FLUTE_REACH, type StoredTake } from "./myFlute";
 import type { ScheduledNote } from "./synth";
 
@@ -16,6 +17,11 @@ export interface FlutePlayer {
   /** Programme une mélodie ; renvoie l'heure audio du départ. */
   schedule(notes: ScheduledNote[], lead?: number): number;
   play(midi: number, durationSec: number): void;
+  /**
+   * Programme une autre voix (2ᵉ flûte d'un duo) : `t0` = heure audio du temps `origin` de la
+   * partition, `speed` = tempo choisi / tempo écrit ; les notes hors de [origin, until[ sont ignorées.
+   */
+  scheduleAt(notes: PianoNote[], t0: number, opts?: { origin?: number; until?: number; speed?: number }): void;
   stop(): void;
   close(): void;
 }
@@ -150,6 +156,15 @@ export class SampledFlute implements FlutePlayer {
 
   play(midi: number, durationSec: number): void {
     this.note(midi, this.ctx.currentTime + 0.02, durationSec, false, false);
+  }
+
+  scheduleAt(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1 } = {}): void {
+    for (const n of notes) {
+      if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
+      const at = t0 + (n.startSec - origin) / speed;
+      if (at < this.ctx.currentTime - 0.01) continue;
+      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, false, false);
+    }
   }
 
   stop(): void {
