@@ -10,6 +10,8 @@ const STORE = "user-scores";
 export interface StoredScore {
   entry: CatalogEntry;
   xml: string;
+  /** Partie(s) de piano pour l'accompagnement (partitions flûte + piano). */
+  accompaniment?: string;
   addedAt: number;
 }
 
@@ -46,14 +48,20 @@ export async function listUserScores(): Promise<CatalogEntry[]> {
 }
 
 /** Enregistre la partition et la renvoie avec sa date d'import. */
-export async function saveUserScore(entry: CatalogEntry, xml: string): Promise<CatalogEntry> {
+export async function saveUserScore(entry: CatalogEntry, xml: string, accompaniment?: string): Promise<CatalogEntry> {
   const addedAt = Date.now();
-  await run("readwrite", (s) => s.put({ entry, xml, addedAt } satisfies StoredScore));
+  await run("readwrite", (s) => s.put({ entry, xml, accompaniment, addedAt } satisfies StoredScore));
   return { ...entry, addedAt };
 }
 
 export async function deleteUserScore(id: string): Promise<void> {
   await run("readwrite", (s) => s.delete(id));
+}
+
+/** Partie de piano d'une partition importée flûte + piano (null s'il n'y en a pas). */
+export async function getUserScoreAccompaniment(id: string): Promise<string | null> {
+  const stored = await run<StoredScore | undefined>("readonly", (s) => s.get(id));
+  return stored?.accompaniment ?? null;
 }
 
 export async function getUserScoreXml(id: string): Promise<string> {
@@ -100,7 +108,12 @@ export function parseBackup(text: string): StoredScore[] {
       typeof s?.entry?.title === "string" &&
       typeof s?.xml === "string" &&
       s.xml.includes("score-partwise"),
-  ).map((s) => ({ entry: { ...s.entry, origin: "import" }, xml: s.xml, addedAt: Number(s.addedAt) || Date.now() }));
+  ).map((s) => ({
+    entry: { ...s.entry, origin: "import" },
+    xml: s.xml,
+    accompaniment: typeof s.accompaniment === "string" ? s.accompaniment : undefined,
+    addedAt: Number(s.addedAt) || Date.now(),
+  }));
 }
 
 /** Restaure une sauvegarde (les partitions déjà présentes sont remplacées par leur copie). Renvoie le nombre restauré. */

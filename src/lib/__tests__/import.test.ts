@@ -40,8 +40,37 @@ describe("import d'une partition", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("refuse une partition sans flûte à plusieurs instruments", () => {
-    expect(() => prepareImport(DUET.replace("Flûte", "Violon"), "x.xml")).toThrow(/Aucune partie de flûte/);
+  it("flûte + piano : garde la flûte, et le piano pour l'accompagnement", () => {
+    const { entry, xml, accompaniment } = prepareImport(DUET, "duo.xml");
+    expect(entry.kind).toBe("flute-piano");
+    expect(xml).toContain("Flûte");
+    expect(xml).not.toContain("Piano");
+    expect(accompaniment).toContain("Piano");
+    expect(accompaniment).not.toContain("Flûte");
+  });
+
+  it("sans flûte mais avec un piano : partition pour piano seul", () => {
+    const { entry, xml, accompaniment, warnings } = prepareImport(DUET.replace("Flûte", "Violon"), "x.xml");
+    expect(entry.kind).toBe("piano");
+    expect(xml).toContain("Piano");
+    expect(xml).not.toContain("Violon");
+    expect(accompaniment).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  it("une seule partie de piano (nom « Piano » ou deux portées) : piano seul, pas flûte", () => {
+    const solo = DUET.replace('<score-part id="P2"><part-name>Flûte</part-name></score-part>', "").replace(/<part id="P2">[\s\S]*?<\/part>/, "");
+    expect(prepareImport(solo, "solo.xml").entry.kind).toBe("piano");
+    const twoStaves = solo.replace("<part-name>Piano</part-name>", "<part-name>Instrument</part-name>").replace("<divisions>1</divisions>", "<divisions>1</divisions><staves>2</staves>");
+    expect(prepareImport(twoStaves, "solo.xml").entry.kind).toBe("piano");
+    // une seule partie sur une portée, sans nom d'instrument : la flûte, comme avant
+    const melody = solo.replace("<part-name>Piano</part-name>", "<part-name>Instrument</part-name>");
+    expect(prepareImport(melody, "solo.xml").entry.kind).toBe("flute");
+  });
+
+    it("refuse une partition sans flûte ni piano", () => {
+    const strings = DUET.replace("Flûte", "Violon").replace("<part-name>Piano", "<part-name>Violoncelle");
+    expect(() => prepareImport(strings, "x.xml")).toThrow(/Aucune partie de flûte ni de piano/);
   });
 
   it("refuse un fichier qui n'est pas du MusicXML", () => {

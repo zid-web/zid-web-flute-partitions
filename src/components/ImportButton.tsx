@@ -22,8 +22,8 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
   async function importFile(file: File) {
     setStatus({ kind: "busy" });
     try {
-      const { entry, xml, warnings } = prepareImport(await readScoreFile(file), file.name);
-      const saved = await saveUserScore(entry, xml);
+      const { entry, xml, accompaniment, warnings } = prepareImport(await readScoreFile(file), file.name);
+      const saved = await saveUserScore(entry, xml, accompaniment);
       setStatus({ kind: "done", entry, warnings });
       onImported(saved);
     } catch (e) {

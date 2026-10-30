@@ -22,11 +22,13 @@ export class MicPitchSource {
     private readonly onReading: (r: PitchReading) => void,
     private readonly minClarity = 0.9,
     private readonly minLevel = 0.01,
+    /** Avec l'accompagnement de piano : on retire du micro le son du haut-parleur. */
+    private readonly echoCancellation = false,
   ) {}
 
   async start(): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: { echoCancellation: this.echoCancellation, noiseSuppression: false, autoGainControl: false },
     });
     this.ctx = new AudioContext();
     const source = this.ctx.createMediaStreamSource(this.stream);
