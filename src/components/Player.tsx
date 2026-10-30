@@ -226,7 +226,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const inTune = cents !== null && Math.abs(cents) <= DEFAULT_FOLLOWER_OPTIONS.toleranceCents;
 
   return (
-    <main className="player">
+    <main className={mode === "listen" || mode === "mic" ? "player playing" : "player"}>
       <header className="player-bar">
         <button className="ghost" onClick={onBack}>
           ← Bibliothèque
