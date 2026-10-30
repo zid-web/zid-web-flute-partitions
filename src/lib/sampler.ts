@@ -1,6 +1,6 @@
 import type { PianoNote } from "./accompaniment";
 import { MY_FLUTE_REACH, type StoredTake } from "./myFlute";
-import type { ScheduledNote } from "./synth";
+import { dynamicGain, type ScheduledNote } from "./synth";
 
 /**
  * Vraie flûte traversière pour le mode « Écouter » : enregistrements note par note
@@ -147,9 +147,12 @@ export class SampledFlute implements FlutePlayer {
     const t0 = this.ctx.currentTime + lead;
     notes.forEach((n, i) => {
       const next = notes[i + 1];
-      const legato = next !== undefined && Math.abs(next.start - (n.start + n.duration)) < 0.01;
-      const previousTied = i > 0 && Math.abs(notes[i - 1].start + notes[i - 1].duration - n.start) < 0.01;
-      this.note(n.midi, t0 + n.start, n.duration, legato, previousTied);
+      const adjacent = (a: ScheduledNote, b: ScheduledNote) => Math.abs(b.start - (a.start + a.duration)) < 0.01;
+      // Liaisons écrites si la partition en donne, sinon déduites de l'enchaînement des notes.
+      const legato = n.slurred ?? (next !== undefined && adjacent(n, next));
+      const prev = notes[i - 1];
+      const slurredIn = prev !== undefined && (prev.slurred ?? adjacent(prev, n));
+      this.note(n.midi, t0 + n.start, n.duration, legato, slurredIn, n.velocity, n.gate);
     });
     return t0;
   }
@@ -159,12 +162,13 @@ export class SampledFlute implements FlutePlayer {
   }
 
   scheduleAt(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1 } = {}): void {
-    for (const n of notes) {
-      if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
+    notes.forEach((n, i) => {
+      if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) return;
       const at = t0 + (n.startSec - origin) / speed;
-      if (at < this.ctx.currentTime - 0.01) continue;
-      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, false, false);
-    }
+      if (at < this.ctx.currentTime - 0.01) return;
+      const slurredIn = Boolean(notes[i - 1]?.slurred);
+      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, Boolean(n.slurred), slurredIn, n.velocity, n.gate);
+    });
   }
 
   stop(): void {
@@ -192,16 +196,25 @@ export class SampledFlute implements FlutePlayer {
    * `legato` : la note suivante enchaîne sans silence (on ne détache presque pas) ;
    * `slurredIn` : la précédente enchaînait, on entre sans la petite attaque soufflée.
    */
-  private note(midi: number, t: number, written: number, legato: boolean, slurredIn: boolean): void {
+  private note(
+    midi: number,
+    t: number,
+    written: number,
+    legato: boolean,
+    slurredIn: boolean,
+    velocity?: number,
+    gate?: number,
+  ): void {
     const source = chooseSource(midi, this.myNotes, this.notes);
     const mine = source.mine ? this.mine.get(source.sample) : undefined;
     const buffer = mine?.buffer ?? this.buffers.get(source.sample);
     if (!buffer) return;
     // transposition, et correction de la justesse mesurée à l'enregistrement de « Ma flûte »
     const rate = Math.pow(2, (midi - source.sample - (mine?.cents ?? 0) / 100) / 12);
-    const sounding = Math.max(0.08, written * (legato ? 0.98 : 0.9));
+    // Articulation écrite (staccato…) sinon jeu habituel ; nuance écrite sinon mf.
+    const sounding = Math.max(0.06, written * (gate ?? (legato ? 0.98 : 0.9)));
     const end = t + sounding;
-    const level = sampleGain(midi);
+    const level = sampleGain(midi) * dynamicGain(velocity);
     const held = this.ends.get(buffer) ?? buffer.duration;
 
     const env = this.ctx.createGain();

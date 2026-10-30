@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { keepParts, melodyOrnaments, pianoNotes, pianoPartIds } from "../accompaniment";
+import { keepParts, melodyNotes, pianoNotes, pianoPartIds } from "../accompaniment";
 
 const n = (step: string, octave: number, dur: number, extra = "") =>
   `<note>${extra.includes("<chord/>") ? "<chord/>" : ""}<pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${dur}</duration>${extra.replace("<chord/>", "")}</note>`;
@@ -120,9 +120,60 @@ ${n("E", 5, 1, '<notations><ornaments><trill-mark/></ornaments></notations>')}${
 <note><rest/><duration>1</duration></note>${n("A", 4, 1, '<tie type="start"/>')}</measure>
 <measure number="2">${n("A", 4, 2, '<tie type="stop"/>')}${n("B", 4, 2, '<notations><ornaments><mordent/></ornaments></notations>')}</measure>
 </part></score-partwise>`;
-    const orns = melodyOrnaments(xml);
+    const orns = melodyNotes(xml).map((m) => m.ornament);
     expect(orns.map((o) => o?.type ?? null)).toEqual([null, "trill", null, "mordent"]); // Sol, Mi (trille), La (lié), Si
     expect(orns[1]?.upper).toBe(78); // Mi5 → Fa♯5 en Sol majeur
     expect(orns[3]?.lower).toBe(69); // Si4 → La4
+  });
+});
+
+describe("nuances, articulations et liaisons écrites", () => {
+  const piece = (body: string) => `<?xml version="1.0"?><score-partwise><part-list>
+<score-part id="P1"><part-name>Flûte</part-name></score-part></part-list><part id="P1">
+<measure number="1"><attributes><divisions>1</divisions></attributes><sound tempo="60"/>${body}</measure>
+</part></score-partwise>`;
+  const dyn = (mark: string) => `<direction><direction-type><dynamics><${mark}/></dynamics></direction-type></direction>`;
+  const wedge = (type: string) => `<direction><direction-type><wedge type="${type}"/></direction-type></direction>`;
+  const art = (inner: string) => `<notations><articulations>${inner}</articulations></notations>`;
+
+  it("staccato, staccatissimo, tenuto raccourcissent ou tiennent la note ; accent et marcato la renforcent", () => {
+    const m = melodyNotes(piece(
+      n("C", 5, 1, art("<staccato/>")) + n("D", 5, 1, art("<staccatissimo/>")) + n("E", 5, 1, art("<tenuto/>")) +
+      n("F", 5, 1, art("<accent/>")) + n("G", 5, 1, art("<strong-accent/>")) + n("A", 5, 1),
+    ));
+    expect(m.map((x) => x.gate)).toEqual([0.5, 0.3, 1, undefined, undefined, undefined]);
+    expect(m[3].velocity).toBeGreaterThan(m[5].velocity);
+    expect(m[4].velocity).toBeGreaterThan(m[3].velocity);
+  });
+
+  it("nuances : p plus doux que f", () => {
+    const m = melodyNotes(piece(dyn("p") + n("C", 5, 1) + dyn("f") + n("C", 5, 1)));
+    expect(m[0].velocity).toBeLessThan(m[1].velocity);
+  });
+
+  it("soufflet crescendo : la force monte note après note jusqu'à la nuance d'arrivée", () => {
+    const m = melodyNotes(piece(dyn("p") + wedge("crescendo") + n("C", 5, 1) + n("D", 5, 1) + n("E", 5, 1) + wedge("stop") + dyn("f") + n("F", 5, 1)));
+    const v = m.map((x) => x.velocity);
+    expect(v[0]).toBeLessThan(v[1]);
+    expect(v[1]).toBeLessThan(v[2]);
+    expect(v[2]).toBeCloseTo(v[3], 5); // arrive sur le f
+  });
+
+  it("diminuendo sans nuance d'arrivée : la force baisse", () => {
+    const m = melodyNotes(piece(dyn("f") + wedge("diminuendo") + n("C", 5, 1) + n("D", 5, 1) + wedge("stop") + n("E", 5, 1)));
+    expect(m[1].velocity).toBeLessThan(m[0].velocity);
+    expect(m[2].velocity).toBeCloseTo(m[1].velocity, 5);
+  });
+
+  it("liaison d'expression : notes liées à la suivante, sauf la dernière de la liaison", () => {
+    const slur = (type: string) => `<notations><slur type="${type}" number="1"/></notations>`;
+    const m = melodyNotes(piece(n("C", 5, 1, slur("start")) + n("D", 5, 1) + n("E", 5, 1, slur("stop")) + n("F", 5, 1)));
+    expect(m.map((x) => x.slurred)).toEqual([true, true, false, false]);
+  });
+
+  it("le piano raccourcit aussi ses notes staccato", () => {
+    const notes = pianoNotes(piece(n("C", 4, 2, art("<staccato/>"))));
+    expect(notes[0].gate).toBe(0.5);
+    expect(notes[0].seconds).toBe(2); // durée écrite inchangée : c'est le jeu qui raccourcit
   });
 });

@@ -34,6 +34,17 @@ export interface ScheduledNote {
   start: number;
   /** Durée écrite, en secondes. */
   duration: number;
+  /** Force 0–1 d'après les nuances et accents (mf ≈ 0,68) ; absent = mf. */
+  velocity?: number;
+  /** Part de la durée jouée (staccato 0,5…) ; absent = jeu habituel. */
+  gate?: number;
+  /** Liée à la suivante (liaison d'expression) ; absent = déduit de l'enchaînement des notes. */
+  slurred?: boolean;
+}
+
+/** Nuance → volume relatif (mf = 1). */
+export function dynamicGain(velocity = 0.68): number {
+  return 0.4 + 0.88 * velocity;
 }
 
 const cents = (f: number, c: number) => f * Math.pow(2, c / 1200);
@@ -89,15 +100,15 @@ export class FluteSynth {
     notes.forEach((n, i) => {
       const next = notes[i + 1];
       // Liaison : une note suivie immédiatement d'une autre est à peine détachée (coup de langue léger).
-      const legato = next !== undefined && Math.abs(next.start - (n.start + n.duration)) < 0.01;
-      this.note(n.midi, t0 + n.start, n.duration, legato);
+      const legato = n.slurred ?? (next !== undefined && Math.abs(next.start - (n.start + n.duration)) < 0.01);
+      this.note(n.midi, t0 + n.start, n.duration, legato, n.velocity, n.gate);
     });
     return t0;
   }
 
   /** Autre voix (2ᵉ flûte) depuis le temps `origin` de la partition (voir FlutePlayer). */
   scheduleAt(
-    notes: { midi: number; startSec: number; seconds: number }[],
+    notes: { midi: number; startSec: number; seconds: number; velocity?: number; gate?: number; slurred?: boolean }[],
     t0: number,
     { origin = 0, until = Infinity, speed = 1 } = {},
   ): void {
@@ -105,7 +116,7 @@ export class FluteSynth {
       if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
       const at = t0 + (n.startSec - origin) / speed;
       if (at < this.ctx.currentTime - 0.01) continue;
-      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, false);
+      this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, Boolean(n.slurred), n.velocity, n.gate);
     }
   }
 
@@ -131,12 +142,12 @@ export class FluteSynth {
     if (this.ctx instanceof AudioContext) void this.ctx.close();
   }
 
-  private note(midi: number, t: number, written: number, legato: boolean): void {
+  private note(midi: number, t: number, written: number, legato: boolean, velocity?: number, gate?: number): void {
     const c = this.ctx;
     const f = midiToFreq(midi);
-    const sounding = Math.max(0.07, written * (legato ? 0.97 : 0.9));
+    const sounding = Math.max(0.06, written * (gate ?? (legato ? 0.97 : 0.9)));
     const end = t + sounding;
-    const peak = loudnessFor(midi);
+    const peak = loudnessFor(midi) * dynamicGain(velocity);
     const attack = midi < 72 ? 0.07 : 0.045; // le grave « parle » un peu plus lentement
 
     // Voix principale : forme d'onde à harmoniques, légère montée vers la justesse.
