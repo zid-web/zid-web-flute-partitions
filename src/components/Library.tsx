@@ -318,6 +318,9 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
       <footer className="credits">
         Partitions du domaine public (IMSLP et répertoire traditionnel). Fonctionne hors ligne. Les partitions
         importées restent sur cet appareil. Version {__APP_VERSION__}, mise à jour automatique.
+        <br />
+        Sons : flûte VSCO-2 Community Edition, Versilian Studios (CC0) ; piano Salamander Grand Piano, Alexander Holm
+        (CC-BY 3.0).
       </footer>
     </main>
   );
