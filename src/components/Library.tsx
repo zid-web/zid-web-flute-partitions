@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
 import type { PieceProgress } from "../lib/progress";
 import { groupHeadings, loadSortKey, saveSortKey, SORT_LABELS, sortEntries, type SortKey } from "../lib/sortScores";
@@ -10,13 +10,19 @@ interface Props {
   onOpen: (entry: CatalogEntry) => void;
   onImported: (entry: CatalogEntry) => void;
   onDelete: (entries: CatalogEntry[]) => void;
+  /** Enregistre un fichier de sauvegarde des partitions importées. */
+  onBackup: () => Promise<void>;
+  /** Restaure un fichier de sauvegarde ; renvoie le message à afficher. */
+  onRestore: (file: File) => Promise<string>;
 }
 
 const LEVELS = [1, 2, 3, 4, 5] as const;
 const SORT_KEYS = Object.keys(SORT_LABELS) as SortKey[];
 const dateFormat = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" });
 
-export function Library({ catalog, progress, onOpen, onImported, onDelete }: Props) {
+export function Library({ catalog, progress, onOpen, onImported, onDelete, onBackup, onRestore }: Props) {
+  const restoreInput = useRef<HTMLInputElement>(null);
+  const [backupMessage, setBackupMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [level, setLevel] = useState<CatalogEntry["level"] | 0>(0);
   const [mineOnly, setMineOnly] = useState(false);
   const [query, setQuery] = useState("");
@@ -98,6 +104,10 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
             <b>Ranger</b> : « Trier par » classe les morceaux par niveau, date d'import, compositeur ou titre.
             <b> 🗑 Supprimer…</b> permet d'effacer plusieurs partitions importées d'un coup.
           </li>
+          <li>
+            <b>💾 Sauvegarder</b> enregistre une copie de vos partitions importées ; <b>♻️ Restaurer</b> les remet
+            dans l'application (après une réinstallation, ou sur un autre appareil).
+          </li>
         </ol>
       </details>
 
@@ -135,6 +145,40 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
             ))}
           </select>
         </label>
+        {!selecting && (
+          <div className="backup">
+            {mineCount > 0 && (
+              <button
+                className="ghost"
+                title="Enregistrer une copie de vos partitions importées (à garder en lieu sûr)"
+                onClick={() => {
+                  setBackupMessage(null);
+                  onBackup().catch(() => setBackupMessage({ text: "Sauvegarde impossible.", error: true }));
+                }}
+              >
+                💾 Sauvegarder
+              </button>
+            )}
+            <button className="ghost" title="Récupérer des partitions depuis un fichier de sauvegarde" onClick={() => restoreInput.current?.click()}>
+              ♻️ Restaurer
+            </button>
+            <input
+              ref={restoreInput}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                onRestore(file).then(
+                  (text) => setBackupMessage({ text }),
+                  (err: Error) => setBackupMessage({ text: err.message, error: true }),
+                );
+              }}
+            />
+          </div>
+        )}
         {mineCount > 0 &&
           (selecting ? (
             <div className="select-bar" role="toolbar" aria-label="Suppression de partitions importées">
@@ -159,6 +203,11 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete }: Pro
             </button>
           ))}
       </div>
+      {backupMessage && (
+        <p className={backupMessage.error ? "select-hint error" : "select-hint"} role="status">
+          {backupMessage.text}
+        </p>
+      )}
       {selecting && <p className="select-hint">Touchez les partitions importées à supprimer.</p>}
 
       {!selecting && (

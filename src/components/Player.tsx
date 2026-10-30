@@ -38,9 +38,15 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const [bestStreak, setBestStreak] = useState(0);
   const [praise, setPraise] = useState<string | null>(null);
   const [stars, setStars] = useState<number | null>(null);
-  const [tempo, setTempo] = useState(72);
+  // Tempo choisi (noires par minute) ; au chargement, celui écrit sur la partition.
+  const [tempo, setTempo] = useState(120);
+  const [writtenTempo, setWrittenTempo] = useState(120);
   const [octaveTolerant, setOctaveTolerant] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+
+  const listenStepRef = useRef(0);
+  const modeRef = useRef<Mode>("idle");
+  modeRef.current = mode;
 
   const expectedMidi = scoreRef.current?.steps[step]?.midi ?? null;
 
@@ -61,8 +67,9 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           DEFAULT_FOLLOWER_OPTIONS,
         );
         setTotal(controller.steps.length);
-        const bpm = controller.osmd.Sheet?.DefaultStartTempoInBpm;
-        if (bpm && bpm >= 40 && bpm <= 140) setTempo(Math.round(bpm));
+        const written = Math.round(controller.tempo);
+        setWrittenTempo(written);
+        setTempo(written);
         setLoading(false);
       })
       .catch((e: Error) => !cancelled && setLoadError(e.message));
@@ -170,44 +177,68 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     }
   }, [handleEvents, restart]);
 
-  /** Mode Écouter : l'application joue le morceau et la partition défile. */
-  const startListen = useCallback(async () => {
-    restart();
-    const score = scoreRef.current;
-    if (!score) return;
-    const synth = (synthRef.current ??= new FluteSynth());
-    await synth.resume();
-    setMode("listen");
-    const secPerBeat = 60 / tempo;
-    // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
-    const t0 = synth.schedule(
-      score.steps.map((s) => ({ midi: s.midi, start: s.startBeat * secPerBeat, duration: s.beats * secPerBeat })),
-    );
-    const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
-    score.steps.forEach((s, i) => {
-      const t = window.setTimeout(() => {
-        if (i > 0) score.color(i - 1, COLORS.hit);
-        score.goToStep(i);
-        setStep(i);
-        setHeard(s.midi);
-      }, offsetMs + s.startBeat * secPerBeat * 1000);
-      timersRef.current.push(t);
-    });
-    const last = score.steps.at(-1);
-    if (last) {
+  /**
+   * Mode Écouter : l'application joue le morceau à partir de la note `from`, et la partition défile.
+   * Les durées viennent de la partition (changements de tempo compris) ; le curseur Tempo les
+   * accélère ou les ralentit toutes dans la même proportion, comme la vitesse de lecture de MuseScore.
+   */
+  const playFrom = useCallback(
+    (from: number) => {
+      const score = scoreRef.current;
+      const synth = synthRef.current;
+      if (!score || !synth) return;
+      timersRef.current.forEach(clearTimeout);
+      timersRef.current = [];
+      synth.stop();
+      const steps = score.steps.slice(from);
+      if (steps.length === 0) return;
+      const speed = tempo / score.tempo;
+      const origin = steps[0].startSec;
+      const at = (sec: number) => (sec - origin) / speed;
+      // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
+      const t0 = synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
+      const offsetMs = Math.max(0, (t0 - synth.ctx.currentTime) * 1000);
+      steps.forEach((s, k) => {
+        const i = from + k;
+        const t = window.setTimeout(() => {
+          if (i > 0) score.color(i - 1, COLORS.hit);
+          score.goToStep(i);
+          listenStepRef.current = i;
+          setStep(i);
+          setHeard(s.midi);
+        }, offsetMs + at(s.startSec) * 1000);
+        timersRef.current.push(t);
+      });
+      const last = steps[steps.length - 1];
       const end = window.setTimeout(
         () => {
           score.resetColors();
           score.goToStep(0);
+          listenStepRef.current = 0;
           setStep(0);
           setHeard(null);
           setMode("idle");
         },
-        offsetMs + (last.startBeat + last.beats) * secPerBeat * 1000 + 300,
+        offsetMs + (at(last.startSec) + last.seconds / speed) * 1000 + 300,
       );
       timersRef.current.push(end);
-    }
-  }, [restart, tempo]);
+    },
+    [tempo],
+  );
+
+  const startListen = useCallback(async () => {
+    restart();
+    synthRef.current ??= new FluteSynth();
+    await synthRef.current.resume();
+    setMode("listen");
+    listenStepRef.current = 0;
+    playFrom(0);
+  }, [restart, playFrom]);
+
+  // Tempo changé pendant l'écoute : on repart de la note en cours à la nouvelle vitesse.
+  useEffect(() => {
+    if (modeRef.current === "listen") playFrom(listenStepRef.current);
+  }, [playFrom]);
 
   /** Sans flûte sous la main : valide la note attendue (entraînement / accessibilité). */
   const skipNote = useCallback(() => {
@@ -286,8 +317,13 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           ↺ Recommencer
         </button>
         <label className="slider">
-          Tempo {tempo}
-          <input type="range" min={40} max={140} value={tempo} onChange={(e) => setTempo(Number(e.target.value))} />
+          Tempo ♩ = {tempo}
+          <input type="range" min={30} max={240} value={tempo} onChange={(e) => setTempo(Number(e.target.value))} />
+          {tempo !== writtenTempo && (
+            <button className="link" onClick={() => setTempo(writtenTempo)} title="Revenir au tempo de la partition">
+              partition : {writtenTempo}
+            </button>
+          )}
         </label>
         <label className="toggle">
           <input type="checkbox" checked={octaveTolerant} onChange={(e) => setOctaveTolerant(e.target.checked)} />

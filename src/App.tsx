@@ -5,7 +5,14 @@ import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
 import { startContentSync } from "./lib/contentSync";
 import { loadProgress, type PieceProgress } from "./lib/progress";
-import { deleteUserScore, listUserScores } from "./lib/userScores";
+import { saveFile } from "./lib/saveFile";
+import {
+  deleteUserScore,
+  exportUserScores,
+  listUserScores,
+  requestPersistentStorage,
+  restoreUserScores,
+} from "./lib/userScores";
 
 export function App() {
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
@@ -35,7 +42,11 @@ export function App() {
       },
       (e: Error) => setError(e.message),
     );
-    void listUserScores().then(setUserScores);
+    void listUserScores().then((list) => {
+      setUserScores(list);
+      // Des partitions importées sur cet appareil : on demande qu'elles ne soient jamais effacées.
+      if (list.length > 0) void requestPersistentStorage();
+    });
     const stopWaiting = onUpdateWaiting(setUpdateWaiting);
     return () => {
       stopSync();
@@ -60,6 +71,18 @@ export function App() {
     } finally {
       setUserScores(await listUserScores());
     }
+  }, []);
+
+  const backupUserScores = useCallback(async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    await saveFile(await exportUserScores(), `mes-partitions-flute-${date}.json`, "application/json");
+  }, []);
+
+  const restoreBackup = useCallback(async (file: File): Promise<string> => {
+    const count = await restoreUserScores(await file.text());
+    setUserScores(await listUserScores());
+    void requestPersistentStorage();
+    return count === 0 ? "Aucune partition dans cette sauvegarde." : `${count} partition${count > 1 ? "s" : ""} restaurée${count > 1 ? "s" : ""}.`;
   }, []);
 
   if (error) return <p className="message">⚠️ {error}</p>;
@@ -95,7 +118,12 @@ export function App() {
           catalog={all}
           progress={progress}
           onOpen={setCurrent}
-          onImported={(entry) => setUserScores((list) => [entry, ...list])}
+          onImported={(entry) => {
+            setUserScores((list) => [entry, ...list]);
+            void requestPersistentStorage();
+          }}
+          onBackup={backupUserScores}
+          onRestore={restoreBackup}
           onDelete={(entries) => void removeUserScores(entries)}
         />
       )}
