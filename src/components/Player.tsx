@@ -5,6 +5,8 @@ import { centsOff, midiToName } from "../lib/notes";
 import { MicPitchSource } from "../lib/pitch";
 import { recordResult, type PieceProgress } from "../lib/progress";
 import { COLORS, ScoreController } from "../lib/score";
+import { isMyFluteEnabled, listTakes } from "../lib/myFlute";
+import { SampledFlute, type FlutePlayer } from "../lib/sampler";
 import { FluteSynth } from "../lib/synth";
 import { Fingering } from "./Fingering";
 
@@ -24,7 +26,9 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const scoreRef = useRef<ScoreController | null>(null);
   const followerRef = useRef<ScoreFollower | null>(null);
   const micRef = useRef<MicPitchSource | null>(null);
-  const synthRef = useRef<FluteSynth | null>(null);
+  const synthRef = useRef<FlutePlayer | null>(null);
+  // Vraie flûte (enregistrements) ; le synthétiseur ne sert que si elle ne peut pas être chargée.
+  const fluteRef = useRef<Promise<FlutePlayer> | null>(null);
   const timersRef = useRef<number[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -43,6 +47,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const [writtenTempo, setWrittenTempo] = useState(120);
   const [octaveTolerant, setOctaveTolerant] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const [myFluteSound, setMyFluteSound] = useState(false);
 
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
@@ -228,7 +233,20 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
 
   const startListen = useCallback(async () => {
     restart();
-    synthRef.current ??= new FluteSynth();
+    if (!fluteRef.current) {
+      // Contexte audio créé tout de suite (dans le geste de l'utilisateur), puis chargement des sons :
+      // votre flûte (« Ma flûte ») si vous l'avez enregistrée, sinon la flûte de référence.
+      const ctx = new AudioContext({ latencyHint: "playback" });
+      void ctx.resume();
+      fluteRef.current = (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
+        .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
+        .then((flute) => {
+          setMyFluteSound(flute.usesMyFlute);
+          return flute as FlutePlayer;
+        })
+        .catch(() => new FluteSynth(ctx));
+    }
+    synthRef.current ??= await fluteRef.current;
     await synthRef.current.resume();
     setMode("listen");
     listenStepRef.current = 0;
@@ -331,6 +349,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
         </label>
       </section>
       {micError && <p className="message error">{micError}</p>}
+      {mode === "listen" && myFluteSound && <p className="sound-note">🎙️ Son : votre flûte</p>}
       {entry.origin === "omr" && (
         <p className="omr-note">
           🔍 Partition reconnue automatiquement à partir d'un PDF scanné : une note peut être fausse. En cas de doute,

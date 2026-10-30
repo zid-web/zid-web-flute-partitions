@@ -1,0 +1,4 @@
+Échantillons de flûte traversière : VSCO-2 Community Edition, Versilian Studios
+(https://github.com/sgossner/VSCO-2-CE), instrument « Flute », articulation « susvib ».
+Licence : CC0 1.0 Universel (domaine public).
+Préparés avec scripts/flute_samples.py (silence retiré, volume égalisé, MP3 mono).
