@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pianoNotes, splitAccompaniment, type PianoNote } from "../lib/accompaniment";
+import {
+  expandOrnament,
+  melodyNotes,
+  pianoNotes,
+  splitAccompaniment,
+  type MelodyNote,
+  type PianoNote,
+} from "../lib/accompaniment";
 import { LEVEL_LABELS, loadAccompanimentXml, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
@@ -36,6 +43,9 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const pianoNotesRef = useRef<PianoNote[]>([]);
   // 2ᵉ flûte d'un duo : jouée par l'application (même son de flûte), pendant que vous jouez la 1ʳᵉ.
   const flute2NotesRef = useRef<PianoNote[]>([]);
+  // Interprétation de la mélodie (nuances, articulations, liaisons, ornements), jouée par « Écouter » :
+  // une entrée par note de la partition.
+  const melodyRef = useRef<MelodyNote[]>([]);
   const pianoOnly = entry.kind === "piano";
   const timersRef = useRef<number[]>([]);
 
@@ -80,6 +90,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       .then(async (xml) => {
         // Parties jouées par l'application : toute la partition (piano seul), ou l'accompagnement gardé
         // à l'import ou publié avec le morceau (piano et/ou 2ᵉ flûte).
+        melodyRef.current = entry.kind === "piano" ? [] : melodyNotes(xml);
         if (entry.kind === "piano") {
           pianoNotesRef.current = pianoNotes(xml);
           flute2NotesRef.current = [];
@@ -293,9 +304,28 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       const origin = steps[0].startSec;
       const at = (sec: number) => (sec - origin) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
-      const t0 = pianoOnly
-        ? synth.ctx.currentTime + 0.12
-        : synth.schedule(steps.map((s) => ({ midi: s.midi, start: at(s.startSec), duration: s.seconds / speed })));
+      // Ce qui est écrit sur la partition : nuances, articulations, liaisons, ornements — si la
+      // partition et le curseur comptent les mêmes notes (sinon, par prudence, jeu neutre).
+      const written = melodyRef.current.length === score.steps.length ? melodyRef.current : [];
+      const melody = steps.flatMap((s, k) => {
+        const w = written[from + k];
+        const note: PianoNote = {
+          midi: s.midi,
+          startSec: s.startSec,
+          seconds: s.seconds,
+          velocity: w?.velocity ?? 0.68,
+          ...(w ? { slurred: w.slurred, gate: w.gate } : {}),
+        };
+        return (w?.ornament ? expandOrnament(note, w.ornament) : [note]).map((n) => ({
+          midi: n.midi,
+          start: at(n.startSec),
+          duration: n.seconds / speed,
+          velocity: n.velocity,
+          gate: n.gate,
+          slurred: n.slurred,
+        }));
+      });
+      const t0 = pianoOnly ? synth.ctx.currentTime + 0.12 : synth.schedule(melody);
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
       if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
       if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, speed });

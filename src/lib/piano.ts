@@ -47,7 +47,8 @@ export class PianoSampler {
       if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
       const at = t0 + (n.startSec - origin) / speed;
       if (at < this.ctx.currentTime - 0.01) continue;
-      this.strike(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, n.velocity);
+      // staccato (gate < 1) : l'étouffoir retombe plus tôt
+      this.strike(n.midi, Math.max(at, this.ctx.currentTime), (n.seconds * (n.gate ?? 1)) / speed, n.velocity);
     }
   }
 
