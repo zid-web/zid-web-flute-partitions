@@ -5,6 +5,7 @@ import { Player } from "./components/Player";
 import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
 import { startContentSync } from "./lib/contentSync";
+import { movementsOf } from "./lib/movements";
 import { loadProgress, type PieceProgress } from "./lib/progress";
 import { saveFile } from "./lib/saveFile";
 import {
@@ -20,6 +21,8 @@ export function App() {
   const [userScores, setUserScores] = useState<CatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState<CatalogEntry | null>(null);
+  // Mouvement ouvert par l'enchaînement de l'écoute : il se joue dès qu'il est prêt.
+  const [autoListen, setAutoListen] = useState(false);
   const [myFlute, setMyFlute] = useState(false);
   const [progress, setProgress] = useState<Record<string, PieceProgress>>(loadProgress);
   const [news, setNews] = useState<string | null>(null);
@@ -66,6 +69,7 @@ export function App() {
   }, [news]);
 
   const all = useMemo(() => [...userScores, ...(catalog ?? [])], [catalog, userScores]);
+  const movements = useMemo(() => (current ? movementsOf(current, all) : []), [current, all]);
 
   const removeUserScores = useCallback(async (entries: CatalogEntry[]) => {
     try {
@@ -110,7 +114,14 @@ export function App() {
       {banners}
       {current ? (
         <Player
+          key={current.id}
           entry={current}
+          movements={movements}
+          autoListen={autoListen}
+          onOpenMovement={(entry, listen) => {
+            setAutoListen(listen);
+            setCurrent(entry);
+          }}
           onBack={() => setCurrent(null)}
           onProgress={setProgress}
           bestStars={progress[current.id]?.stars ?? 0}
@@ -122,7 +133,10 @@ export function App() {
           onMyFlute={() => setMyFlute(true)}
           catalog={all}
           progress={progress}
-          onOpen={setCurrent}
+          onOpen={(entry) => {
+            setAutoListen(false);
+            setCurrent(entry);
+          }}
           onImported={(entry) => {
             setUserScores((list) => [entry, ...list]);
             void requestPersistentStorage();

@@ -20,3 +20,5 @@ Application React + Vite + TypeScript (PWA) empaquetée avec Tauri 2. Français 
 - Partitions importées : uniquement sur l'appareil (`src/lib/userScores.ts`, IndexedDB), jamais envoyées sur un serveur.
 - IMSLP bloque les téléchargements automatiques (« Bot Check ») : ne jamais chercher à le contourner ; les PDF passent par le dépôt manuel `content/a-convertir/` (workflow « Conversion des partitions déposées »).
 - Pas de connexion directe de l'application à IMSLP : le catalogue passe par le workflow « Curation IMSLP » et une pull request validée.
+- Tessiture : à l'import, les notes injouables à la flûte (hors Si3–Ré7) sont ramenées à l'octave jouable (`src/lib/fluteRange.ts`, pur et testé) ; les partitions déjà importées le sont à l'ouverture (`withPlayableOctaves`).
+- Mouvements : une œuvre importée en un fichier par mouvement est regroupée (`src/lib/movements.ts`, pur et testé : titre d'œuvre + numéro de mouvement MusicXML, ou nom de fichier `.mvt2`, `- 2`) ; « Écouter » enchaîne les mouvements en gardant le même contexte audio.

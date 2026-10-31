@@ -11,6 +11,8 @@ import {
   type Partner,
   type ScoreKind,
 } from "./accompaniment";
+import { foldToFluteRange } from "./fluteRange";
+import { leadingNumber, movementFromName } from "./movements";
 import { copyTempoMarks, hasTempoMarks, partTempoMap } from "./tempo";
 
 export const ACCEPTED_EXTENSIONS = ".mxl,.musicxml,.xml";
@@ -54,8 +56,28 @@ function partsOnly(rawXml: string, ids: string[], tempos: number[]): Document {
  * Repère les parties : flûte (suivie au micro), piano (accompagnement, ou partition pour piano
  * seul jouée au piano). Calcule niveau et complexité, et prépare l'entrée de bibliothèque.
  */
+/** Œuvre, titre et numéro du mouvement : MusicXML (titre d'œuvre, de mouvement, numéro), sinon nom du fichier. */
+function movementInfo(doc: Document, fileName: string): { work?: string; movement?: number; title?: string } {
+  const root = doc.documentElement;
+  const read = (sel: string) => root.querySelector(sel)?.textContent?.trim() || undefined;
+  const workTitle = read(":scope > work > work-title");
+  const movementTitle = read(":scope > movement-title");
+  const fromName = movementFromName(fileName);
+  const written = Number(read(":scope > movement-number"));
+  const number =
+    (Number.isInteger(written) && written > 0 ? written : null) ??
+    fromName?.number ??
+    (workTitle && movementTitle ? leadingNumber(movementTitle) : null);
+  // « Sonate en mi mineur – II. Allegro » plutôt que le seul titre de l'œuvre, commun à tous les mouvements
+  const title = workTitle && movementTitle && movementTitle !== workTitle ? `${workTitle} – ${movementTitle}` : undefined;
+  const work = (number && (workTitle ?? fromName?.work)) || undefined;
+  return { ...(work && number ? { work, movement: number } : {}), ...(title ? { title } : {}) };
+}
+
 export function prepareImport(rawXml: string, fileName: string): PreparedImport {
   const doc = parseMusicXml(rawXml);
+  const movement = movementInfo(doc, fileName);
+  let folded = 0;
   const firstPart = doc.documentElement.querySelector(":scope > part");
   const tempos = firstPart ? partTempoMap(firstPart) : [];
   const pianos = pianoPartIds(doc);
@@ -71,6 +93,9 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
     const keptId = flute?.getAttribute("id") ?? "";
     // Deux flûtes sur la même portée : la voix du haut pour l'élève, l'autre jouée par l'application.
     const secondVoice = splitFluteVoices(doc);
+    // Notes impossibles à la flûte (souvent une erreur de reconnaissance) : ramenées à l'octave jouable.
+    if (flute) folded = foldToFluteRange(flute);
+    if (secondVoice) foldToFluteRange(secondVoice);
     // Gardés pour être joués par l'application : le piano, et la 2ᵉ flûte d'un duo
     // (l'élève joue la 1ʳᵉ flûte, la première partie nommée flûte).
     const otherPianos = pianos.filter((id) => id !== keptId);
@@ -84,6 +109,10 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
       const acc = others.length ? partsOnly(rawXml, others, tempos) : (doc.cloneNode(true) as Document);
       if (!others.length) keepParts(acc, []);
       if (secondVoice) appendFlute2(acc, secondVoice);
+      // la 2ᵉ flûte aussi, jouée par l'application avec un vrai son de flûte
+      for (const part of Array.from(acc.documentElement.querySelectorAll(":scope > part"))) {
+        if (!otherPianos.includes(part.getAttribute("id") ?? "")) foldToFluteRange(part);
+      }
       accompaniment = new XMLSerializer().serializeToString(acc);
     }
   } else if (pianos.length) {
@@ -97,12 +126,18 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
   const a = analyseScore(doc);
   const xml = new XMLSerializer().serializeToString(doc);
   const fallbackTitle = fileName.replace(/\.(mxl|musicxml|xml)$/i, "");
-  const title = a.title === "Sans titre" ? fallbackTitle : a.title;
+  const title = movement.title ?? (a.title === "Sans titre" ? fallbackTitle : a.title);
+  const warnings = kind === "piano" ? [] : scoreWarnings(a);
+  if (folded > 0) {
+    warnings.unshift(
+      `${folded} note${folded > 1 ? "s" : ""} hors de la tessiture de la flûte ${folded > 1 ? "ont été ramenées" : "a été ramenée"} à l'octave jouable`,
+    );
+  }
   return {
     xml,
     accompaniment,
     // une partition pour piano n'est pas suivie au micro : pas d'avertissement de tessiture de flûte
-    warnings: kind === "piano" ? [] : scoreWarnings(a),
+    warnings,
     entry: {
       id: `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       title,
@@ -118,6 +153,7 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
       license: "Fichier personnel",
       origin: "import",
       kind,
+      ...(movement.work ? { work: movement.work, movement: movement.movement } : {}),
       ...(partners.length ? { partners } : {}),
       tags: [
         "importée",

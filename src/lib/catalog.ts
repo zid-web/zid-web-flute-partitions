@@ -1,4 +1,5 @@
 import { syncedAccompanimentXml, syncedCatalog, syncedScoreXml } from "./contentSync";
+import { foldToFluteRange } from "./fluteRange";
 import { getUserScoreAccompaniment, getUserScoreXml } from "./userScores";
 
 /** Une entrée du catalogue généré par le skill `imslp-flute-curator`. */
@@ -29,6 +30,9 @@ export interface CatalogEntry {
   accompanimentFile?: string;
   /** Partitions importées seulement : date d'import (ms), pour les ranger par ordre d'import. */
   addedAt?: number;
+  /** Partitions importées : œuvre et numéro du mouvement, pour enchaîner les mouvements à l'écoute. */
+  work?: string;
+  movement?: number;
 }
 
 export const LEVEL_LABELS: Record<CatalogEntry["level"], string> = {
@@ -41,12 +45,26 @@ export const LEVEL_LABELS: Record<CatalogEntry["level"], string> = {
 
 /** Contenu MusicXML d'un morceau : fichier publié, ou partition importée sur l'appareil. */
 export async function loadScoreXml(entry: CatalogEntry): Promise<string> {
-  if (entry.origin === "import") return getUserScoreXml(entry.id);
+  if (entry.origin === "import") {
+    const xml = await getUserScoreXml(entry.id);
+    return entry.kind === "piano" ? xml : withPlayableOctaves(xml);
+  }
   const synced = await syncedScoreXml(entry.id);
   if (synced) return synced;
   const res = await fetch(`${import.meta.env.BASE_URL}scores/${entry.file}`);
   if (!res.ok) throw new Error(`Partition introuvable (${res.status})`);
   return res.text();
+}
+
+/**
+ * Partitions importées avant la correction automatique de tessiture : les notes injouables à la
+ * flûte sont ramenées à l'octave jouable à l'ouverture (le fichier enregistré n'est pas modifié).
+ */
+export function withPlayableOctaves(xml: string): string {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const part = doc.documentElement.querySelector(":scope > part");
+  if (!part || doc.getElementsByTagName("parsererror").length || foldToFluteRange(part) === 0) return xml;
+  return new XMLSerializer().serializeToString(doc);
 }
 
 /**

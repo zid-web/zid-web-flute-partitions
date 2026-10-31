@@ -25,13 +25,42 @@ interface Props {
   bestStars: number;
   onBack: () => void;
   onProgress: (p: Record<string, PieceProgress>) => void;
+  /** Mouvements de la même œuvre, dans l'ordre (la partition seule s'il n'y en a pas d'autres). */
+  movements?: CatalogEntry[];
+  /** Ouvre un autre mouvement ; `listen` : l'écoute y démarre toute seule (enchaînement). */
+  onOpenMovement?: (entry: CatalogEntry, listen: boolean) => void;
+  /** Démarrer l'écoute dès que la partition est prête (mouvement enchaîné). */
+  autoListen?: boolean;
+}
+
+interface AudioBundle {
+  ctx: AudioContext;
+  flute: Promise<FlutePlayer>;
+  /** false : simple synthétiseur (partition pour piano seul), la vraie flûte n'est pas chargée. */
+  realFlute: boolean;
+  piano?: Promise<PianoSampler | null>;
+}
+
+/**
+ * Sons passés d'un mouvement au suivant : le contexte audio, déjà autorisé par un geste de
+ * l'utilisateur, et les enregistrements déjà chargés (sinon Safari bloquerait l'enchaînement).
+ */
+let handoff: AudioBundle | null = null;
+
+const CHAIN_KEY = "flute-partitions:chain-movements";
+function loadChain(): boolean {
+  try {
+    return localStorage.getItem(CHAIN_KEY) !== "off";
+  } catch {
+    return true;
+  }
 }
 
 type Mode = "idle" | "mic" | "listen" | "finished";
 
 const PRAISE = ["Bravo !", "Super !", "Magnifique !", "Quelle oreille !", "Continuez !", "Parfait !"];
 
-export function Player({ entry, bestStars, onBack, onProgress }: Props) {
+export function Player({ entry, bestStars, onBack, onProgress, movements = [entry], onOpenMovement, autoListen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scoreRef = useRef<ScoreController | null>(null);
   const followerRef = useRef<ScoreFollower | null>(null);
@@ -39,7 +68,13 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
   const synthRef = useRef<FlutePlayer | null>(null);
   // Sons, chargés au premier « Écouter » ou « Jouer » : vraie flûte (le synthétiseur ne sert que si
   // elle ne peut pas être chargée) et vrai piano pour l'accompagnement, sur un même contexte audio.
-  const audioRef = useRef<{ ctx: AudioContext; flute: Promise<FlutePlayer>; piano?: Promise<PianoSampler | null> } | null>(null);
+  const audioRef = useRef<AudioBundle | null>(null);
+  // Vrai quand on passe à un autre mouvement : les sons lui sont transmis au lieu d'être fermés.
+  const handingOffRef = useRef(false);
+  const movementIndex = Math.max(0, movements.findIndex((m) => m.id === entry.id));
+  const nextMovement = movements[movementIndex + 1] ?? null;
+  const [chain, setChain] = useState(loadChain);
+  const [upcoming, setUpcoming] = useState<CatalogEntry | null>(null);
   const pianoRef = useRef<PianoSampler | null>(null);
   const pianoNotesRef = useRef<PianoNote[]>([]);
   // 2ᵉ flûte d'un duo : jouée par l'application (même son de flûte), pendant que vous jouez la 1ʳᵉ.
@@ -128,7 +163,13 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     return () => {
       cancelled = true;
       micRef.current?.stop();
-      synthRef.current?.close();
+      if (handingOffRef.current && audioRef.current) {
+        synthRef.current?.stop();
+        pianoRef.current?.stop();
+        handoff = audioRef.current;
+      } else {
+        void audioRef.current?.ctx.close().catch(() => {});
+      }
       timersRef.current.forEach(clearTimeout);
       cancelAnimationFrame(rafRef.current);
       controller.dispose();
@@ -197,6 +238,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     cancelAnimationFrame(rafRef.current);
     synthRef.current?.stop();
     pianoRef.current?.stop();
+    setUpcoming(null);
     const score = scoreRef.current;
     score?.resetColors();
     score?.goToStep(0);
@@ -217,24 +259,32 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
    * l'avez enregistrée, la flûte de référence sinon, et le piano s'il y a une partie de piano.
    */
   const ensureAudio = useCallback(async () => {
+    const loadFlute = (ctx: AudioContext): Promise<FlutePlayer> =>
+      (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
+        .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
+        .then((f) => {
+          setMyFluteSound(f.usesMyFlute);
+          return f as FlutePlayer;
+        })
+        .catch(() => new FluteSynth(ctx));
+    // Sons transmis par le mouvement précédent (transmis au démontage de celui-ci, donc lus ici).
+    if (!audioRef.current && handoff && handoff.ctx.state !== "closed") audioRef.current = handoff;
+    if (audioRef.current === handoff) handoff = null;
     if (!audioRef.current) {
       const ctx = new AudioContext({ latencyHint: "playback" });
       void ctx.resume();
-      const flute: Promise<FlutePlayer> = pianoOnly
-        ? Promise.resolve(new FluteSynth(ctx))
-        : (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
-            .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
-            .then((f) => {
-              setMyFluteSound(f.usesMyFlute);
-              return f as FlutePlayer;
-            })
-            .catch(() => new FluteSynth(ctx));
-      audioRef.current = { ctx, flute };
+      audioRef.current = { ctx, flute: pianoOnly ? Promise.resolve(new FluteSynth(ctx)) : loadFlute(ctx), realFlute: !pianoOnly };
     }
     const audio = audioRef.current;
+    // Mouvement précédent pour piano seul : la vraie flûte n'était pas encore chargée.
+    if (!pianoOnly && !audio.realFlute) {
+      audio.flute = loadFlute(audio.ctx);
+      audio.realFlute = true;
+    }
+    if (!pianoOnly && audio.realFlute) void audio.flute.then((f) => setMyFluteSound(f instanceof SampledFlute && f.usesMyFlute));
     if (!audio.piano && pianoNotesRef.current.length) audio.piano = PianoSampler.load(audio.ctx).catch(() => null);
     await audio.ctx.resume();
-    synthRef.current ??= await audio.flute;
+    synthRef.current = await audio.flute;
     pianoRef.current ??= (await audio.piano) ?? null;
   }, [pianoOnly]);
 
@@ -367,6 +417,12 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           setStep(0);
           setHeard(null);
           setMode("idle");
+          // Mouvement suivant de l'œuvre : il s'ouvre et se joue tout seul, après une courte pause.
+          const next = chainRef.current;
+          if (next) {
+            setUpcoming(next.entry);
+            timersRef.current.push(window.setTimeout(() => next.open(), 2000));
+          }
           return;
         }
         let q = shownPos;
@@ -393,6 +449,18 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     [tempo, pianoOn, flute2On, pianoOnly],
   );
 
+  // Lu à la fin de l'écoute : le mouvement à enchaîner, s'il y en a un et si l'enchaînement est activé.
+  const chainRef = useRef<{ entry: CatalogEntry; open: () => void } | null>(null);
+  const openMovement = useCallback(
+    (target: CatalogEntry, listen: boolean) => {
+      handingOffRef.current = true;
+      onOpenMovement?.(target, listen);
+    },
+    [onOpenMovement],
+  );
+  chainRef.current =
+    chain && nextMovement && onOpenMovement ? { entry: nextMovement, open: () => openMovement(nextMovement, true) } : null;
+
   const startListen = useCallback(async () => {
     restart();
     await ensureAudio();
@@ -400,6 +468,14 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
     listenStepRef.current = 0;
     playFrom(0);
   }, [restart, playFrom, ensureAudio]);
+
+  // Mouvement enchaîné : l'écoute démarre dès que la partition est prête.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoListen || loading || loadError || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void startListen();
+  }, [autoListen, loading, loadError, startListen]);
 
   // Tempo changé pendant l'écoute : on repart de la note en cours à la nouvelle vitesse.
   useEffect(() => {
@@ -432,6 +508,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           <strong>{entry.title}</strong>
           <span>
             {entry.composer} · Niveau {entry.level} ({LEVEL_LABELS[entry.level]})
+            {movements.length > 1 && ` · Mouvement ${movementIndex + 1}/${movements.length}`}
           </span>
         </div>
         <span className="best">Record : {"★".repeat(bestStars) || "—"}</span>
@@ -505,6 +582,30 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
             🎶 2ᵉ flûte
           </label>
         )}
+        {movements.length > 1 && onOpenMovement && (
+          <>
+            <label className="toggle" title="À la fin de l'écoute, le mouvement suivant se joue tout seul">
+              <input
+                type="checkbox"
+                checked={chain}
+                onChange={(e) => {
+                  setChain(e.target.checked);
+                  try {
+                    localStorage.setItem(CHAIN_KEY, e.target.checked ? "on" : "off");
+                  } catch {
+                    /* préférence non mémorisée */
+                  }
+                }}
+              />
+              ⏭ Enchaîner les mouvements
+            </label>
+            {nextMovement && (
+              <button onClick={() => openMovement(nextMovement, false)} title={nextMovement.title}>
+                Mouvement suivant ▶
+              </button>
+            )}
+          </>
+        )}
         {!pianoOnly && (
           <label className="toggle">
             <input type="checkbox" checked={octaveTolerant} onChange={(e) => setOctaveTolerant(e.target.checked)} />
@@ -513,6 +614,7 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
         )}
       </section>
       {micError && <p className="message error">{micError}</p>}
+      {upcoming && <p className="sound-note">⏭ Mouvement suivant : « {upcoming.title} »…</p>}
       {mode === "listen" && myFluteSound && !pianoOnly && <p className="sound-note">🎙️ Son : votre flûte</p>}
       {pianoOnly && (
         <p className="sound-note">🎹 Partition pour piano : appuyez sur « Écouter » pour l'entendre au piano.</p>
