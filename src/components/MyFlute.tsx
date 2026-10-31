@@ -19,8 +19,18 @@ import { Fingering } from "./Fingering";
 
 const dateFormat = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
 
+interface Props {
+  onBack: () => void;
+  /** Sauvegarde (partitions importées + notes) ; renvoie le message à afficher, ou null si annulée. */
+  onBackup: () => Promise<string | null>;
+  /** Restaure un fichier de sauvegarde ; renvoie le message à afficher. */
+  onRestore: (file: File) => Promise<string>;
+}
+
 /** « Ma flûte » : enregistrer quelques notes pour que « Écouter » joue avec le son de votre flûte. */
-export function MyFlute({ onBack }: { onBack: () => void }) {
+export function MyFlute({ onBack, onBackup, onRestore }: Props) {
+  const restoreInput = useRef<HTMLInputElement>(null);
+  const [backupMessage, setBackupMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [takes, setTakes] = useState<StoredTake[]>([]);
   const [busy, setBusy] = useState<{ midi: number; phase: "countdown" | "recording"; count: number } | null>(null);
   const [level, setLevel] = useState(0);
@@ -109,7 +119,7 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
         <p className="muted">
           Les enregistrements sont gardés dans l'application, sur cet appareil (ils ne sont envoyés nulle part) : ils
           restent après les mises à jour. Pour les retrouver après une réinstallation ou sur un autre appareil, utilisez{" "}
-          <b>💾 Sauvegarder</b> dans la bibliothèque, puis <b>♻️ Restaurer</b>.
+          <b>💾 Sauvegarder mes notes</b> ci-dessous, puis <b>♻️ Restaurer</b>.
         </p>
         <label className="toggle">
           <input
@@ -134,6 +144,49 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
           />
           Uniquement ma flûte (jamais la flûte de référence)
         </label>
+        <div className="backup">
+          <button
+            className="ghost"
+            disabled={busy !== null || takes.length === 0}
+            title="Enregistrer une copie de vos notes (et de vos partitions importées), à garder en lieu sûr"
+            onClick={() => {
+              setBackupMessage(null);
+              onBackup().then(
+                (text) => text && setBackupMessage({ text: `✅ ${text}` }),
+                (e: unknown) =>
+                  setBackupMessage({ text: `Sauvegarde impossible : ${e instanceof Error ? e.message : String(e)}`, error: true }),
+              );
+            }}
+          >
+            💾 Sauvegarder mes notes
+          </button>
+          <button className="ghost" disabled={busy !== null} onClick={() => restoreInput.current?.click()}>
+            ♻️ Restaurer
+          </button>
+          <input
+            ref={restoreInput}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              onRestore(file).then(
+                async (text) => {
+                  setBackupMessage({ text });
+                  await refresh();
+                },
+                (err: Error) => setBackupMessage({ text: err.message, error: true }),
+              );
+            }}
+          />
+        </div>
+        {backupMessage && (
+          <p className={backupMessage.error ? "message error" : "muted"} role="status">
+            {backupMessage.text}
+          </p>
+        )}
         {error && <p className="message error">{error}</p>}
       </section>
 
