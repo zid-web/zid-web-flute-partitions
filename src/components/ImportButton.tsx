@@ -6,8 +6,9 @@ import { saveUserScore } from "../lib/userScores";
 type Status =
   | { kind: "idle" }
   | { kind: "busy" }
-  | { kind: "done"; entry: CatalogEntry; warnings: string[] }
-  | { kind: "error"; message: string };
+  | { kind: "done"; results: Result[] };
+
+type Result = { file: string } & ({ entry: CatalogEntry; warnings: string[] } | { error: string });
 
 /**
  * Import d'une partition MusicXML (.mxl / .musicxml / .xml) téléchargée par l'utilisateur,
@@ -19,16 +20,22 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
   const [dragging, setDragging] = useState(false);
   const [help, setHelp] = useState(false);
 
-  async function importFile(file: File) {
+  /** Un ou plusieurs fichiers (par exemple tous les mouvements d'une sonate), importés dans l'ordre choisi. */
+  async function importFiles(files: File[]) {
+    if (!files.length) return;
     setStatus({ kind: "busy" });
-    try {
-      const { entry, xml, accompaniment, warnings } = prepareImport(await readScoreFile(file), file.name);
-      const saved = await saveUserScore(entry, xml, accompaniment);
-      setStatus({ kind: "done", entry, warnings });
-      onImported(saved);
-    } catch (e) {
-      setStatus({ kind: "error", message: e instanceof Error ? e.message : "Import impossible." });
+    const results: Result[] = [];
+    for (const file of files) {
+      try {
+        const { entry, xml, accompaniment, warnings } = prepareImport(await readScoreFile(file), file.name);
+        const saved = await saveUserScore(entry, xml, accompaniment);
+        results.push({ file: file.name, entry: saved, warnings });
+        onImported(saved);
+      } catch (e) {
+        results.push({ file: file.name, error: e instanceof Error ? e.message : "Import impossible." });
+      }
     }
+    setStatus({ kind: "done", results });
   }
 
   return (
@@ -42,8 +49,7 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
-        const file = e.dataTransfer.files[0];
-        if (file) void importFile(file);
+        void importFiles(Array.from(e.dataTransfer.files));
       }}
     >
       <div className="import-row">
@@ -51,7 +57,7 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
           📥 Importer une partition
         </button>
         <span className="import-hint">
-          Fichier MusicXML (.mxl, .musicxml) — ou glissez-le ici.{" "}
+          Fichier(s) MusicXML (.mxl, .musicxml) — ou glissez-les ici.{" "}
           <button className="link" onClick={() => setHelp((h) => !h)}>
             Où en trouver ?
           </button>
@@ -60,11 +66,12 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
           ref={inputRef}
           type="file"
           accept={ACCEPTED_EXTENSIONS}
+          multiple
           hidden
           onChange={(e) => {
-            const file = e.target.files?.[0];
+            const files = Array.from(e.target.files ?? []);
             e.target.value = "";
-            if (file) void importFile(file);
+            void importFiles(files);
           }}
         />
       </div>
@@ -80,23 +87,34 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
             Un PDF peut être converti en MusicXML avec MuseScore (import PDF) ou Audiveris, puis relu avant import.
           </li>
           <li>Si la partition contient plusieurs instruments, seule la partie de flûte est gardée.</li>
+          <li>
+            Une œuvre en plusieurs mouvements : importez les fichiers ensemble (un par mouvement) ; à l'écoute, ils
+            s'enchaînent tout seuls.
+          </li>
         </ol>
       )}
 
       {status.kind === "busy" && <p className="import-status">Analyse de la partition…</p>}
-      {status.kind === "error" && <p className="import-status error">⚠️ {status.message}</p>}
-      {status.kind === "done" && (
-        <p className="import-status ok">
-          ✅ « {status.entry.title} » ajoutée — niveau {status.entry.level} ({LEVEL_LABELS[status.entry.level]}),
-          complexité {status.entry.complexity}/100.
-          {status.warnings.map((w) => (
-            <span key={w} className="warning">
-              {" "}
-              ⚠️ {w}.
-            </span>
-          ))}
-        </p>
-      )}
+      {status.kind === "done" &&
+        status.results.map((r, i) =>
+          "error" in r ? (
+            <p key={i} className="import-status error">
+              ⚠️ {status.results.length > 1 ? `${r.file} : ` : ""}
+              {r.error}
+            </p>
+          ) : (
+            <p key={i} className="import-status ok">
+              ✅ « {r.entry.title} » ajoutée — niveau {r.entry.level} ({LEVEL_LABELS[r.entry.level]}), complexité{" "}
+              {r.entry.complexity}/100.
+              {r.warnings.map((w) => (
+                <span key={w} className="warning">
+                  {" "}
+                  ⚠️ {w}.
+                </span>
+              ))}
+            </p>
+          ),
+        )}
     </section>
   );
 }
