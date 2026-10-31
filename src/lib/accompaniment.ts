@@ -144,6 +144,34 @@ export function splitAccompaniment(xml: string): { piano: PianoNote[]; flute: Pi
   };
 }
 
+/**
+ * Partition à afficher : votre partie, puis la ou les 2ᵉ flûtes de l'accompagnement (le piano
+ * n'est pas affiché), pour voir les notes de la 2ᵉ flûte et le curseur pendant qu'elle joue.
+ * Votre partie reste la première : c'est elle que suivent le micro et les couleurs.
+ */
+export function withPartnerFlutes(mainXml: string, accompanimentXml: string | null): string {
+  if (!accompanimentXml) return mainXml;
+  const acc = new DOMParser().parseFromString(accompanimentXml, "application/xml");
+  const names = partNames(acc.documentElement);
+  const flutes = children(acc.documentElement, "part").filter((p) => !isPianoPart(p, names.get(p.getAttribute("id") ?? "") ?? ""));
+  if (!flutes.length) return mainXml;
+  const doc = new DOMParser().parseFromString(mainXml, "application/xml");
+  const root = doc.documentElement;
+  const taken = new Set(children(root, "part").map((p) => p.getAttribute("id")));
+  flutes.forEach((part, k) => {
+    const oldId = part.getAttribute("id") ?? "";
+    const id = taken.has(oldId) ? `${oldId}-flute${k + 2}` : oldId;
+    taken.add(id);
+    const clone = doc.importNode(part, true) as Element;
+    clone.setAttribute("id", id);
+    appendFlute2(doc, clone);
+    const declared = Array.from(root.getElementsByTagName("score-part")).find((sp) => sp.getAttribute("id") === id);
+    const name = declared?.getElementsByTagName("part-name")[0];
+    if (name) name.textContent = (names.get(oldId) ?? "").trim() || "Flûte 2";
+  });
+  return new XMLSerializer().serializeToString(doc);
+}
+
 /** Partenaires d'une partition : champ `partners`, ou ancien `kind: "flute-piano"`. */
 export function partnersOf(entry: { partners?: Partner[]; kind?: string }): Partner[] {
   return entry.partners ?? (entry.kind === "flute-piano" ? ["piano"] : []);
@@ -248,7 +276,7 @@ export function appendFlute2(doc: Document, part: Element): void {
   name.textContent = "Flûte 2";
   sp.appendChild(name);
   list.appendChild(sp);
-  root.appendChild(doc.importNode(part, true));
+  root.appendChild(part.ownerDocument === doc ? part : doc.importNode(part, true));
 }
 
 /** Y a-t-il une partie nommée flûte ? */

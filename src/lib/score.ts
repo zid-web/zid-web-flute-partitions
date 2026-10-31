@@ -46,6 +46,11 @@ export class ScoreController {
   tempo = DEFAULT_QPM;
   private tempos: number[] = [];
   private timeline: MeasureTimeline = { startSec: [], secPerQuarter: [] };
+  /**
+   * Toutes les positions où une note est jouée, toutes parties comprises (votre flûte et la
+   * 2ᵉ flûte affichée) : le curseur du mode Écouter les parcourt, même pendant vos silences.
+   */
+  positions: { cursorIndex: number; startSec: number }[] = [];
   private gnotesByCursor = new Map<number, GraphicalNote[]>();
   private cursorIndex = 0;
 
@@ -76,7 +81,11 @@ export class ScoreController {
     const cursor = this.osmd.cursor;
     cursor.reset();
     this.steps = [];
+    this.positions = [];
     this.gnotesByCursor.clear();
+    // Seule la première partie (la vôtre) est suivie au micro et colorée ; les autres sont affichées.
+    const mine = this.osmd.Sheet?.Instruments[0];
+    const isMine = (n: Note) => !mine || n.ParentStaffEntry?.ParentStaff?.ParentInstrument === mine;
     let i = 0;
     while (!cursor.Iterator.EndReached) {
       const notes = cursor.NotesUnderCursor();
@@ -90,7 +99,10 @@ export class ScoreController {
       const beat = it.CurrentSourceTimestamp.RealValue * 4;
       const sec = (this.timeline.startSec[m] ?? 0) + inMeasure * secPerBeat;
       // Partition de flûte = monodique : on prend la note la plus aiguë s'il y a un accord.
-      const playable = notes.filter((n) => !n.isRest() && !n.IsGraceNote && !isTieContinuation(n));
+      if (notes.some((n) => !n.isRest() && !n.IsGraceNote && !isTieContinuation(n))) {
+        this.positions.push({ cursorIndex: i, startSec: sec });
+      }
+      const playable = notes.filter((n) => isMine(n) && !n.isRest() && !n.IsGraceNote && !isTieContinuation(n));
       if (playable.length > 0) {
         const top = playable.reduce((a, b) => (noteToMidi(b) > noteToMidi(a) ? b : a));
         let beats = top.Length.RealValue * 4;
@@ -105,7 +117,7 @@ export class ScoreController {
           startSec: sec,
           seconds: beats * secPerBeat,
         });
-        this.gnotesByCursor.set(i, cursor.GNotesUnderCursor());
+        this.gnotesByCursor.set(i, cursor.GNotesUnderCursor().filter((g) => isMine(g.sourceNote)));
       }
       cursor.next();
       i++;
@@ -117,11 +129,17 @@ export class ScoreController {
   /** Place le curseur sur la n-ième note à jouer. */
   goToStep(step: number): void {
     const target = this.steps[step]?.cursorIndex;
-    const cursor = this.osmd.cursor;
     if (target === undefined) {
-      cursor.hide();
+      this.osmd.cursor.hide();
       return;
     }
+    this.goToCursor(target);
+    this.color(step, COLORS.current);
+  }
+
+  /** Place le curseur sur une position de la partition (voir `positions`), sans colorer. */
+  goToCursor(target: number): void {
+    const cursor = this.osmd.cursor;
     if (target < this.cursorIndex) {
       cursor.reset();
       this.cursorIndex = 0;
@@ -131,7 +149,6 @@ export class ScoreController {
       this.cursorIndex++;
     }
     cursor.show();
-    this.color(step, COLORS.current);
   }
 
   color(step: number, color: string): void {
