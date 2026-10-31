@@ -1,7 +1,16 @@
 import JSZip from "jszip";
 import type { CatalogEntry } from "./catalog";
 import { analyseScore, extractFlutePart, parseMusicXml, scoreWarnings } from "./difficulty";
-import { hasFlutePart, keepParts, otherFluteIds, pianoPartIds, type Partner, type ScoreKind } from "./accompaniment";
+import {
+  appendFlute2,
+  hasFlutePart,
+  keepParts,
+  otherFluteIds,
+  pianoPartIds,
+  splitFluteVoices,
+  type Partner,
+  type ScoreKind,
+} from "./accompaniment";
 import { copyTempoMarks, hasTempoMarks, partTempoMap } from "./tempo";
 
 export const ACCEPTED_EXTENSIONS = ".mxl,.musicxml,.xml";
@@ -33,12 +42,12 @@ export interface PreparedImport {
 }
 
 /** Copie ne gardant que certaines parties, avec le tempo de la partition (écrit dans la 1re partie). */
-function partsOnly(rawXml: string, ids: string[], tempos: number[]): string {
+function partsOnly(rawXml: string, ids: string[], tempos: number[]): Document {
   const doc = parseMusicXml(rawXml);
   keepParts(doc, ids);
   const first = doc.documentElement.querySelector(":scope > part");
   if (first && !hasTempoMarks(first)) copyTempoMarks(tempos, first);
-  return new XMLSerializer().serializeToString(doc);
+  return doc;
 }
 
 /**
@@ -60,13 +69,23 @@ export function prepareImport(rawXml: string, fileName: string): PreparedImport 
     const flute = doc.documentElement.querySelector(":scope > part");
     if (flute && !hasTempoMarks(flute)) copyTempoMarks(tempos, flute);
     const keptId = flute?.getAttribute("id") ?? "";
+    // Deux flûtes sur la même portée : la voix du haut pour l'élève, l'autre jouée par l'application.
+    const secondVoice = splitFluteVoices(doc);
     // Gardés pour être joués par l'application : le piano, et la 2ᵉ flûte d'un duo
     // (l'élève joue la 1ʳᵉ flûte, la première partie nommée flûte).
     const otherPianos = pianos.filter((id) => id !== keptId);
     const otherFlutes = otherFluteIds(parseMusicXml(rawXml), keptId);
-    partners = [...(otherPianos.length ? ["piano" as const] : []), ...(otherFlutes.length ? ["flute" as const] : [])];
+    const hasFlute2 = otherFlutes.length > 0 || secondVoice !== null;
+    partners = [...(otherPianos.length ? ["piano" as const] : []), ...(hasFlute2 ? ["flute" as const] : [])];
     kind = otherPianos.length ? "flute-piano" : "flute";
-    if (partners.length) accompaniment = partsOnly(rawXml, [...otherPianos, ...otherFlutes], tempos);
+    if (partners.length) {
+      const others = [...otherPianos, ...otherFlutes];
+      // Sans autre partie, l'accompagnement part d'une copie vide de la partition (titre, tempo…).
+      const acc = others.length ? partsOnly(rawXml, others, tempos) : (doc.cloneNode(true) as Document);
+      if (!others.length) keepParts(acc, []);
+      if (secondVoice) appendFlute2(acc, secondVoice);
+      accompaniment = new XMLSerializer().serializeToString(acc);
+    }
   } else if (pianos.length) {
     kind = "piano";
     keepParts(doc, pianos);
