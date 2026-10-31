@@ -110,12 +110,12 @@ export class FluteSynth {
   scheduleAt(
     notes: { midi: number; startSec: number; seconds: number; velocity?: number; gate?: number; slurred?: boolean }[],
     t0: number,
-    { origin = 0, until = Infinity, speed = 1 } = {},
+    { origin = 0, until = Infinity, speed = 1, late = 0.01 } = {},
   ): void {
     for (const n of notes) {
       if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
       const at = t0 + (n.startSec - origin) / speed;
-      if (at < this.ctx.currentTime - 0.01) continue;
+      if (at < this.ctx.currentTime - late) continue;
       this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, Boolean(n.slurred), n.velocity, n.gate);
     }
   }

@@ -40,13 +40,14 @@ export class PianoSampler {
 
   /**
    * Programme des notes : `t0` = heure audio du temps `origin` de la partition ; `speed` = rapport
-   * entre le tempo choisi et le tempo écrit. Les notes avant `origin` ou après `until` sont ignorées.
+   * entre le tempo choisi et le tempo écrit. Les notes avant `origin` ou après `until` sont ignorées,
+   * ainsi que celles dont l'heure est passée de plus de `late` secondes (les autres sont jouées tout de suite).
    */
-  schedule(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1 } = {}): void {
+  schedule(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1, late = 0.01 } = {}): void {
     for (const n of notes) {
       if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) continue;
       const at = t0 + (n.startSec - origin) / speed;
-      if (at < this.ctx.currentTime - 0.01) continue;
+      if (at < this.ctx.currentTime - late) continue;
       // staccato (gate < 1) : l'étouffoir retombe plus tôt
       this.strike(n.midi, Math.max(at, this.ctx.currentTime), (n.seconds * (n.gate ?? 1)) / speed, n.velocity);
     }

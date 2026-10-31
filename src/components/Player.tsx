@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Accompanist } from "../lib/accompanist";
 import {
   expandOrnament,
   melodyNotes,
@@ -58,6 +59,11 @@ function loadChain(): boolean {
 
 type Mode = "idle" | "mic" | "listen" | "finished";
 
+/** Avance de programmation de l'accompagnement (secondes) : assez pour ne jamais manquer une note. */
+const LOOKAHEAD = 0.15;
+/** Retard du micro et de l'analyse sur le son réel de la flûte (secondes). */
+const MIC_DELAY = 0.03;
+
 const PRAISE = ["Bravo !", "Super !", "Magnifique !", "Quelle oreille !", "Continuez !", "Parfait !"];
 
 export function Player({ entry, bestStars, onBack, onProgress, movements = [entry], onOpenMovement, autoListen }: Props) {
@@ -113,6 +119,16 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
   modeRef.current = mode;
+  /**
+   * Accompagnement pendant que vous jouez (piano, 2ᵉ flûte) : il joue en continu, en avance de
+   * quelques centièmes, au tempo mesuré sur votre jeu ; chacune de vos attaques le recale, et il
+   * vous attend si vous tenez une note (voir `Accompanist`). Programmation toutes les 25 ms.
+   */
+  const accompanistRef = useRef<{ acc: Accompanist; started: boolean; timer: number } | null>(null);
+  const stopAccompanist = useCallback(() => {
+    if (accompanistRef.current) clearInterval(accompanistRef.current.timer);
+    accompanistRef.current = null;
+  }, []);
 
   const expectedMidi = scoreRef.current?.steps[step]?.midi ?? null;
 
@@ -172,6 +188,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       }
       timersRef.current.forEach(clearTimeout);
       cancelAnimationFrame(rafRef.current);
+      if (accompanistRef.current) clearInterval(accompanistRef.current.timer);
       controller.dispose();
     };
   }, [entry]);
@@ -233,6 +250,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const restart = useCallback(() => {
     micRef.current?.stop();
     micRef.current = null;
+    stopAccompanist();
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
     cancelAnimationFrame(rafRef.current);
@@ -251,7 +269,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     setStars(null);
     setHeard(null);
     setMode("idle");
-  }, []);
+  }, [stopAccompanist]);
 
   /**
    * Prépare les sons. Le contexte audio est créé tout de suite (dans le geste de l'utilisateur,
@@ -288,18 +306,37 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     pianoRef.current ??= (await audio.piano) ?? null;
   }, [pianoOnly]);
 
-  // Accompagnement pendant que vous jouez : à chaque note réussie, le piano joue sa partie
-  // jusqu'à votre note suivante (il vous suit, même si vous ralentissez).
-  const accompanyRef = useRef<(index: number) => void>(() => {});
-  accompanyRef.current = (index: number) => {
-    const score = scoreRef.current;
-    const from = score?.steps[index];
-    if (!score || !from) return;
-    const window = { origin: from.startSec, until: score.steps[index + 1]?.startSec ?? Infinity, speed: tempo / score.tempo };
-    const piano = pianoRef.current;
-    if (piano && pianoOn) piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.01, window);
-    const flute = synthRef.current;
-    if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, flute.ctx.currentTime + 0.01, window);
+  /**
+   * Horloge de l'accompagnement : `now` = heure audio programmable au plus tôt ; `heardAt(ms)` =
+   * heure audio du son entendu à l'instant `ms` (horloge `performance.now()`, celle du micro).
+   * Le son programmé à l'heure t est entendu quand la sortie atteint t : on cale donc le piano sur
+   * l'heure de sortie correspondant à l'attaque de la flûte (`getOutputTimestamp`), ce qui inclut
+   * la latence de la carte son.
+   */
+  const audioClock = () => {
+    const ctx = synthRef.current?.ctx ?? pianoRef.current?.ctx;
+    if (!ctx) return null;
+    const now = ctx.currentTime;
+    const stamp = ctx instanceof AudioContext && ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+    const latency = ctx instanceof AudioContext ? ctx.outputLatency || ctx.baseLatency || 0 : 0;
+    const heardAt = (ms: number) =>
+      stamp?.contextTime !== undefined && stamp.performanceTime !== undefined && stamp.performanceTime > 0
+        ? stamp.contextTime + (ms - stamp.performanceTime) / 1000
+        : now - latency - (performance.now() - ms) / 1000;
+    return { now, heardAt };
+  };
+  /** Une de vos notes a été reconnue : son attaque recale l'accompagnement. */
+  const accompanyHit = (index: number, onsetMs: number | null) => {
+    const a = accompanistRef.current;
+    const clock = audioClock();
+    if (!a || !clock) return;
+    // instant de l'attaque sur l'horloge audio (détection un peu après l'attaque, plus le micro)
+    const onset = clock.heardAt(Math.min(onsetMs ?? performance.now(), performance.now())) - MIC_DELAY;
+    if (!a.started) {
+      a.acc.start(scoreRef.current?.steps[index]?.startSec ?? 0, onset, index);
+      a.started = true;
+    }
+    a.acc.hit(index, onset);
   };
 
   const startMic = useCallback(async () => {
@@ -313,7 +350,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         const follower = followerRef.current;
         if (!follower) return;
         const events = follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level });
-        for (const ev of events) if (ev.type === "hit") accompanyRef.current(ev.index);
+        for (const ev of events) if (ev.type === "hit") accompanyHit(ev.index, follower.lastOnsetMs);
         handleEvents(events);
       },
       undefined,
@@ -324,14 +361,31 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       await mic.start();
       micRef.current = mic;
       setMode("mic");
-      // Introduction (avant votre première note), au tempo choisi : piano et/ou 2ᵉ flûte.
       const score = scoreRef.current;
-      if (accompanied && score?.steps[0]) {
-        const intro = { until: score.steps[0].startSec, speed: tempo / score.tempo };
+      const clock = audioClock();
+      if (accompanied && score?.steps[0] && clock) {
+        const acc = new Accompanist(
+          score.steps.map((s) => s.startSec),
+          tempo / score.tempo,
+        );
+        // Introduction (avant votre première note) : l'accompagnement commence seul, au tempo choisi.
+        // Sinon, il démarre avec votre première note.
+        const intro = score.steps[0].startSec > 0.05;
+        if (intro) acc.start(0, clock.now + 0.4);
         const piano = pianoRef.current;
-        if (piano && pianoOn) piano.schedule(pianoNotesRef.current, piano.ctx.currentTime + 0.3, intro);
         const flute = synthRef.current;
-        if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, flute.ctx.currentTime + 0.3, intro);
+        const timer = window.setInterval(() => {
+          const c = audioClock();
+          const a = accompanistRef.current;
+          if (!c || !a?.started) return;
+          const w = a.acc.advance(c.now, LOOKAHEAD);
+          if (!w) return;
+          const opts = { origin: w.from, until: w.to, speed: a.acc.tempoRatio, late: 0.25 };
+          const t0 = a.acc.toAudio(w.from);
+          if (piano && pianoOn) piano.schedule(pianoNotesRef.current, t0, opts);
+          if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, t0, opts);
+        }, 25);
+        accompanistRef.current = { acc, started: intro, timer };
       }
     } catch (e) {
       setMicError(
@@ -489,6 +543,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     if (!follower || !score || follower.done) return;
     const index = follower.position;
     follower.reset(index + 1);
+    accompanyHit(index, performance.now());
     score.color(index, COLORS.hit);
     score.goToStep(index + 1);
     setStep(index + 1);
