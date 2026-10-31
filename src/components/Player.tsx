@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   expandOrnament,
   melodyNotes,
+  withPartnerFlutes,
   pianoNotes,
   splitAccompaniment,
   type MelodyNote,
@@ -106,7 +107,10 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           setHasPiano(pianoNotesRef.current.length > 0);
           setHasFlute2(flute2NotesRef.current.length > 0);
         }
-        return controller.load(xml);
+        // Partition affichée : votre partie, plus la 2ᵉ flûte s'il y en a une (notes et curseur visibles
+        // pendant qu'elle joue). Le micro et les couleurs ne suivent que votre partie, la première.
+        const display = entry.kind === "piano" ? xml : withPartnerFlutes(xml, await loadAccompanimentXml(entry).catch(() => null));
+        return controller.load(display);
       })
       .then(() => {
         if (cancelled) return;
@@ -306,7 +310,9 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       const steps = score.steps.slice(from);
       if (steps.length === 0) return;
       const speed = tempo / score.tempo;
-      const origin = steps[0].startSec;
+      // Depuis le début : on part du début du morceau, pour jouer et montrer une introduction
+      // (2ᵉ flûte, piano) avant votre première note. Sinon : depuis la note en cours.
+      const origin = from === 0 ? 0 : steps[0].startSec;
       const at = (sec: number) => (sec - origin) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
       // Ce qui est écrit sur la partition : nuances, articulations, liaisons, ornements — si la
@@ -341,8 +347,17 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
       const latency = ctx instanceof AudioContext ? (ctx.outputLatency || ctx.baseLatency || 0) : 0;
       const starts = steps.map((s) => t0 + at(s.startSec));
       const last = steps[steps.length - 1];
-      const endAt = t0 + at(last.startSec) + last.seconds / speed + 0.3;
+      // fin : après votre dernière note et après celle de la 2ᵉ flûte, si elle finit plus tard
+      const flute2End = flute2On && !pianoOnly
+        ? Math.max(0, ...flute2NotesRef.current.map((n) => (n.startSec + n.seconds - origin) / speed))
+        : 0;
+      const endAt = t0 + Math.max(at(last.startSec) + last.seconds / speed, flute2End) + 0.3;
       let shown = -1; // dernière note affichée (indice dans `steps`)
+      // Le curseur parcourt toutes les notes jouées (les vôtres et celles de la 2ᵉ flûte affichée),
+      // même pendant vos silences ; la note « À jouer » et les couleurs restent sur votre partie.
+      const positions = score.positions.filter((p) => p.startSec >= origin - 1e-6);
+      const posStarts = positions.map((p) => t0 + at(p.startSec));
+      let shownPos = -1;
       const tick = () => {
         const heardAt = ctx.currentTime - latency;
         if (heardAt >= endAt) {
@@ -354,12 +369,18 @@ export function Player({ entry, bestStars, onBack, onProgress }: Props) {
           setMode("idle");
           return;
         }
+        let q = shownPos;
+        while (q + 1 < posStarts.length && posStarts[q + 1] <= heardAt) q++;
+        if (q > shownPos) {
+          score.goToCursor(positions[q].cursorIndex);
+          shownPos = q;
+        }
         let k = shown;
         while (k + 1 < starts.length && starts[k + 1] <= heardAt) k++;
         if (k > shown) {
           for (let j = Math.max(shown, 0); j < k; j++) score.color(from + j, COLORS.hit);
           if (from + k > 0 && shown < 0) score.color(from + k - 1, COLORS.hit);
-          score.goToStep(from + k);
+          score.color(from + k, COLORS.current);
           listenStepRef.current = from + k;
           setStep(from + k);
           setHeard(steps[k].midi);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { keepParts, melodyNotes, pianoNotes, pianoPartIds } from "../accompaniment";
+import { keepParts, melodyNotes, pianoNotes, pianoPartIds, withPartnerFlutes } from "../accompaniment";
 
 const n = (step: string, octave: number, dur: number, extra = "") =>
   `<note>${extra.includes("<chord/>") ? "<chord/>" : ""}<pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${dur}</duration>${extra.replace("<chord/>", "")}</note>`;
@@ -175,5 +175,29 @@ describe("nuances, articulations et liaisons écrites", () => {
     const notes = pianoNotes(piece(n("C", 4, 2, art("<staccato/>"))));
     expect(notes[0].gate).toBe(0.5);
     expect(notes[0].seconds).toBe(2); // durée écrite inchangée : c'est le jeu qui raccourcit
+  });
+});
+
+describe("partition affichée avec la 2ᵉ flûte", () => {
+  const part = (id: string, name: string, step: string) => ({
+    decl: `<score-part id="${id}"><part-name>${name}</part-name></score-part>`,
+    body: `<part id="${id}"><measure number="1"><attributes><divisions>1</divisions></attributes>${n(step, 5, 4)}</measure></part>`,
+  });
+  const score = (...parts: { decl: string; body: string }[]) =>
+    `<?xml version="1.0"?><score-partwise><part-list>${parts.map((p) => p.decl).join("")}</part-list>${parts.map((p) => p.body).join("")}</score-partwise>`;
+
+  it("votre partie d'abord, puis la 2ᵉ flûte ; le piano n'est pas affiché ; identifiants sans collision", () => {
+    const mine = score(part("P1", "Flûte 1", "C"));
+    const acc = score(part("P1", "Flûte 2", "E"), { ...part("P2", "Piano", "G"), body: part("P2", "Piano", "G").body.replace("<divisions>1</divisions>", "<divisions>1</divisions><staves>2</staves>") });
+    const doc = new DOMParser().parseFromString(withPartnerFlutes(mine, acc), "application/xml");
+    const parts = Array.from(doc.getElementsByTagName("part"));
+    expect(parts.map((p) => p.getAttribute("id"))).toEqual(["P1", "P1-flute2"]);
+    expect(Array.from(doc.getElementsByTagName("part-name")).map((x) => x.textContent)).toEqual(["Flûte 1", "Flûte 2"]);
+    expect(melodyNotes(withPartnerFlutes(mine, acc))).toHaveLength(1); // la mélodie reste votre partie
+  });
+
+  it("sans 2ᵉ flûte : partition inchangée", () => {
+    const mine = score(part("P1", "Flûte", "C"));
+    expect(withPartnerFlutes(mine, null)).toBe(mine);
   });
 });
