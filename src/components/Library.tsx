@@ -12,7 +12,8 @@ interface Props {
   onImported: (entry: CatalogEntry) => void;
   onDelete: (entries: CatalogEntry[]) => void;
   /** Enregistre un fichier de sauvegarde des partitions importées. */
-  onBackup: () => Promise<void>;
+  /** Sauvegarde ; renvoie le message à afficher (où est le fichier), ou null si annulée. */
+  onBackup: () => Promise<string | null>;
   /** Restaure un fichier de sauvegarde ; renvoie le message à afficher. */
   onRestore: (file: File) => Promise<string>;
   /** Ouvre « Ma flûte » (enregistrer le son de sa flûte). */
@@ -186,7 +187,11 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
               title="Enregistrer une copie de vos partitions importées et de vos notes « Ma flûte » (à garder en lieu sûr)"
               onClick={() => {
                 setBackupMessage(null);
-                onBackup().catch(() => setBackupMessage({ text: "Sauvegarde impossible.", error: true }));
+                onBackup().then(
+                  (text) => text && setBackupMessage({ text: `✅ ${text}` }),
+                  (e: unknown) =>
+                    setBackupMessage({ text: `Sauvegarde impossible : ${e instanceof Error ? e.message : String(e)}`, error: true }),
+                );
               }}
             >
               💾 Sauvegarder

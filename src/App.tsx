@@ -81,9 +81,10 @@ export function App() {
     }
   }, []);
 
-  const backupUserScores = useCallback(async () => {
+  /** Sauvegarde (partitions importées + notes de « Ma flûte ») ; renvoie le message à afficher. */
+  const backupUserScores = useCallback(async (): Promise<string | null> => {
     const date = new Date().toISOString().slice(0, 10);
-    await saveFile(await exportUserScores(), `mes-partitions-flute-${date}.json`, "application/json");
+    return saveFile(await exportUserScores(), `mes-partitions-flute-${date}.json`, "application/json");
   }, []);
 
   const restoreBackup = useCallback(async (file: File): Promise<string> => {
@@ -133,7 +134,7 @@ export function App() {
           bestStars={progress[current.id]?.stars ?? 0}
         />
       ) : myFlute ? (
-        <MyFlute onBack={() => setMyFlute(false)} />
+        <MyFlute onBack={() => setMyFlute(false)} onBackup={backupUserScores} onRestore={restoreBackup} />
       ) : (
         <Library
           onMyFlute={() => setMyFlute(true)}
