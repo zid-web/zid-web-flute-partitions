@@ -102,7 +102,11 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
           secondes, dans une pièce calme, à 30–50 cm du micro. Ensuite, <b>🔊 Écouter</b> joue toutes les partitions avec
           votre son (les notes manquantes viennent de la flûte de référence).
         </p>
-        <p className="muted">Les enregistrements restent sur cet appareil : ils ne sont envoyés nulle part.</p>
+        <p className="muted">
+          Les enregistrements sont gardés dans l'application, sur cet appareil (ils ne sont envoyés nulle part) : ils
+          restent après les mises à jour. Pour les retrouver après une réinstallation ou sur un autre appareil, utilisez{" "}
+          <b>💾 Sauvegarder</b> dans la bibliothèque, puis <b>♻️ Restaurer</b>.
+        </p>
         <label className="toggle">
           <input
             type="checkbox"

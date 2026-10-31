@@ -5,6 +5,7 @@ import { Player } from "./components/Player";
 import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
 import { startContentSync } from "./lib/contentSync";
+import { listTakes } from "./lib/myFlute";
 import { movementsOf } from "./lib/movements";
 import { loadProgress, type PieceProgress } from "./lib/progress";
 import { saveFile } from "./lib/saveFile";
@@ -47,10 +48,11 @@ export function App() {
       },
       (e: Error) => setError(e.message),
     );
-    void listUserScores().then((list) => {
+    void Promise.all([listUserScores(), listTakes()]).then(([list, takes]) => {
       setUserScores(list);
-      // Des partitions importées sur cet appareil : on demande qu'elles ne soient jamais effacées.
-      if (list.length > 0) void requestPersistentStorage();
+      // Des partitions importées ou des notes de « Ma flûte » sur cet appareil : on demande au
+      // navigateur de ne jamais les effacer (sinon, il peut vider le stockage quand l'appareil est plein).
+      if (list.length > 0 || takes.length > 0) void requestPersistentStorage();
     });
     const stopWaiting = onUpdateWaiting(setUpdateWaiting);
     return () => {
@@ -85,10 +87,14 @@ export function App() {
   }, []);
 
   const restoreBackup = useCallback(async (file: File): Promise<string> => {
-    const count = await restoreUserScores(await file.text());
+    const { scores, takes } = await restoreUserScores(await file.text());
     setUserScores(await listUserScores());
     void requestPersistentStorage();
-    return count === 0 ? "Aucune partition dans cette sauvegarde." : `${count} partition${count > 1 ? "s" : ""} restaurée${count > 1 ? "s" : ""}.`;
+    const parts = [
+      ...(scores ? [`${scores} partition${scores > 1 ? "s" : ""}`] : []),
+      ...(takes ? [`${takes} note${takes > 1 ? "s" : ""} de « Ma flûte »`] : []),
+    ];
+    return parts.length === 0 ? "Rien à restaurer dans cette sauvegarde." : `Restauré : ${parts.join(" et ")}.`;
   }, []);
 
   if (error) return <p className="message">⚠️ {error}</p>;

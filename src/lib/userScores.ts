@@ -1,4 +1,5 @@
 import type { CatalogEntry } from "./catalog";
+import { decodeTake, encodeTake, listTakes, saveTake, type StoredTake } from "./myFlute";
 
 /**
  * Partitions importées par l'utilisateur, gardées uniquement sur l'appareil (IndexedDB) :
@@ -82,12 +83,22 @@ export async function requestPersistentStorage(): Promise<boolean> {
   }
 }
 
-/** Fichier de sauvegarde : toutes les partitions importées, à garder et à restaurer ailleurs. */
+/**
+ * Fichier de sauvegarde, à garder et à restaurer ailleurs : toutes les partitions importées et,
+ * depuis la version 2, les notes enregistrées de « Ma flûte ».
+ */
 export const BACKUP_FORMAT = "flute-partitions-sauvegarde";
 
 export async function exportUserScores(): Promise<string> {
   const scores = await run<StoredScore[]>("readonly", (s) => s.getAll());
-  return JSON.stringify({ format: BACKUP_FORMAT, version: 1, scores });
+  const takes = (await listTakes()).map(encodeTake);
+  return JSON.stringify({ format: BACKUP_FORMAT, version: 2, scores, takes });
+}
+
+/** Notes de « Ma flûte » d'un fichier de sauvegarde (aucune dans une sauvegarde de version 1). */
+export function parseBackupTakes(text: string): StoredTake[] {
+  const backup = JSON.parse(text) as { takes?: unknown };
+  return Array.isArray(backup.takes) ? backup.takes.map(decodeTake).filter((t): t is StoredTake => t !== null) : [];
 }
 
 /** Vérifie un fichier de sauvegarde et renvoie les partitions qu'il contient. */
@@ -116,9 +127,14 @@ export function parseBackup(text: string): StoredScore[] {
   }));
 }
 
-/** Restaure une sauvegarde (les partitions déjà présentes sont remplacées par leur copie). Renvoie le nombre restauré. */
-export async function restoreUserScores(text: string): Promise<number> {
+/**
+ * Restaure une sauvegarde : les partitions déjà présentes sont remplacées par leur copie, les notes
+ * de « Ma flûte » aussi (même note). Renvoie le nombre de partitions et de notes restaurées.
+ */
+export async function restoreUserScores(text: string): Promise<{ scores: number; takes: number }> {
   const scores = parseBackup(text);
+  const takes = parseBackupTakes(text);
   for (const score of scores) await run("readwrite", (s) => s.put(score));
-  return scores.length;
+  for (const take of takes) await saveTake(take);
+  return { scores: scores.length, takes: takes.length };
 }

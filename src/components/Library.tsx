@@ -128,7 +128,8 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
             avec votre son.
           </li>
           <li>
-            <b>💾 Sauvegarder</b> enregistre une copie de vos partitions importées ; <b>♻️ Restaurer</b> les remet
+            <b>💾 Sauvegarder</b> enregistre une copie de vos partitions importées et de vos notes « Ma flûte » ;{" "}
+            <b>♻️ Restaurer</b> les remet
             dans l'application (après une réinstallation, ou sur un autre appareil).
           </li>
         </ol>
@@ -180,19 +181,17 @@ export function Library({ catalog, progress, onOpen, onImported, onDelete, onBac
         </label>
         {!selecting && (
           <div className="backup">
-            {mineCount > 0 && (
-              <button
-                className="ghost"
-                title="Enregistrer une copie de vos partitions importées (à garder en lieu sûr)"
-                onClick={() => {
-                  setBackupMessage(null);
-                  onBackup().catch(() => setBackupMessage({ text: "Sauvegarde impossible.", error: true }));
-                }}
-              >
-                💾 Sauvegarder
-              </button>
-            )}
-            <button className="ghost" title="Récupérer des partitions depuis un fichier de sauvegarde" onClick={() => restoreInput.current?.click()}>
+            <button
+              className="ghost"
+              title="Enregistrer une copie de vos partitions importées et de vos notes « Ma flûte » (à garder en lieu sûr)"
+              onClick={() => {
+                setBackupMessage(null);
+                onBackup().catch(() => setBackupMessage({ text: "Sauvegarde impossible.", error: true }));
+              }}
+            >
+              💾 Sauvegarder
+            </button>
+            <button className="ghost" title="Récupérer partitions et notes « Ma flûte » depuis un fichier de sauvegarde" onClick={() => restoreInput.current?.click()}>
               ♻️ Restaurer
             </button>
             <input
