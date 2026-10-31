@@ -161,6 +161,59 @@ export async function deleteTake(midi: number): Promise<void> {
   await run("readwrite", (s) => s.delete(midi));
 }
 
+// --- Sauvegarde (fichier gardé par l'utilisateur, jamais envoyé) -----------------
+
+/** Une note de « Ma flûte » dans un fichier de sauvegarde : son en 16 bits, encodé en base64. */
+export interface BackupTake {
+  midi: number;
+  sampleRate: number;
+  cents: number;
+  recordedAt: number;
+  pcm16: string;
+}
+
+export function encodeTake(take: StoredTake): BackupTake {
+  const pcm = new Float32Array(take.pcm);
+  const ints = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) ints[i] = Math.round(Math.max(-1, Math.min(1, pcm[i])) * 32767);
+  const bytes = new Uint8Array(ints.buffer);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { midi: take.midi, sampleRate: take.sampleRate, cents: take.cents, recordedAt: take.recordedAt, pcm16: btoa(bin) };
+}
+
+/** Relit une note sauvegardée ; null si elle est abîmée ou n'est pas une note à enregistrer. */
+export function decodeTake(t: unknown): StoredTake | null {
+  const b = t as Partial<BackupTake> | null;
+  if (
+    !b ||
+    !(TARGET_NOTES as readonly number[]).includes(Number(b.midi)) ||
+    !(Number(b.sampleRate) >= 8000 && Number(b.sampleRate) <= 192000) ||
+    typeof b.pcm16 !== "string"
+  ) {
+    return null;
+  }
+  let bin: string;
+  try {
+    bin = atob(b.pcm16);
+  } catch {
+    return null;
+  }
+  if (bin.length < 2 || bin.length % 2) return null;
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const ints = new Int16Array(bytes.buffer);
+  const pcm = new Float32Array(ints.length);
+  for (let i = 0; i < ints.length; i++) pcm[i] = ints[i] / 32767;
+  return {
+    midi: Number(b.midi),
+    sampleRate: Number(b.sampleRate),
+    pcm,
+    cents: Number.isFinite(Number(b.cents)) ? Number(b.cents) : 0,
+    recordedAt: Number(b.recordedAt) || Date.now(),
+  };
+}
+
 // --- Préférence : jouer avec ma flûte ----------------------------------------
 
 const PREF = "flute-partitions:ma-flute";
@@ -176,6 +229,28 @@ export function isMyFluteEnabled(): boolean {
 export function setMyFluteEnabled(on: boolean): void {
   try {
     localStorage.setItem(PREF, on ? "oui" : "non");
+  } catch {
+    // préférence non mémorisée
+  }
+}
+
+const ONLY_PREF = "flute-partitions:ma-flute-seule";
+
+/**
+ * Uniquement ma flûte (par défaut) : toutes les notes sont jouées avec vos enregistrements, depuis
+ * la note enregistrée la plus proche, même lointaine ; la flûte de référence ne sert plus.
+ */
+export function isMyFluteOnly(): boolean {
+  try {
+    return localStorage.getItem(ONLY_PREF) !== "non";
+  } catch {
+    return true;
+  }
+}
+
+export function setMyFluteOnly(on: boolean): void {
+  try {
+    localStorage.setItem(ONLY_PREF, on ? "oui" : "non");
   } catch {
     // préférence non mémorisée
   }
