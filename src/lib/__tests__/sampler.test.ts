@@ -44,4 +44,11 @@ describe("« Ma flûte » d'abord", () => {
     expect(chooseSource(60, mine, NOTES)).toEqual({ mine: false, sample: 60 });
     expect(chooseSource(90, [], NOTES)).toEqual({ mine: false, sample: 88 });
   });
+
+  it("uniquement ma flûte : toujours la note enregistrée la plus proche, même lointaine", () => {
+    const mine = [69, 72];
+    expect(chooseSource(60, mine, NOTES, true)).toEqual({ mine: true, sample: 69 });
+    expect(chooseSource(93, mine, NOTES, true)).toEqual({ mine: true, sample: 72 });
+    expect(chooseSource(90, [], NOTES, true)).toEqual({ mine: false, sample: 88 }); // rien d'enregistré
+  });
 });

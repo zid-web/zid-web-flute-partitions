@@ -234,6 +234,28 @@ export function setMyFluteEnabled(on: boolean): void {
   }
 }
 
+const ONLY_PREF = "flute-partitions:ma-flute-seule";
+
+/**
+ * Uniquement ma flûte (par défaut) : toutes les notes sont jouées avec vos enregistrements, depuis
+ * la note enregistrée la plus proche, même lointaine ; la flûte de référence ne sert plus.
+ */
+export function isMyFluteOnly(): boolean {
+  try {
+    return localStorage.getItem(ONLY_PREF) !== "non";
+  } catch {
+    return true;
+  }
+}
+
+export function setMyFluteOnly(on: boolean): void {
+  try {
+    localStorage.setItem(ONLY_PREF, on ? "oui" : "non");
+  } catch {
+    // préférence non mémorisée
+  }
+}
+
 // --- Enregistrement au micro --------------------------------------------------
 
 /**

@@ -14,7 +14,7 @@ import { centsOff, midiToName } from "../lib/notes";
 import { MicPitchSource } from "../lib/pitch";
 import { recordResult, type PieceProgress } from "../lib/progress";
 import { COLORS, ScoreController } from "../lib/score";
-import { isMyFluteEnabled, listTakes } from "../lib/myFlute";
+import { isMyFluteEnabled, isMyFluteOnly, listTakes } from "../lib/myFlute";
 import { PianoSampler } from "../lib/piano";
 import { SampledFlute, type FlutePlayer } from "../lib/sampler";
 import { FluteSynth } from "../lib/synth";
@@ -261,7 +261,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const ensureAudio = useCallback(async () => {
     const loadFlute = (ctx: AudioContext): Promise<FlutePlayer> =>
       (isMyFluteEnabled() ? listTakes() : Promise.resolve([]))
-        .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes))
+        .then((takes) => SampledFlute.load(ctx, import.meta.env.BASE_URL, takes, isMyFluteOnly()))
         .then((f) => {
           setMyFluteSound(f.usesMyFlute);
           return f as FlutePlayer;
@@ -615,7 +615,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       </section>
       {micError && <p className="message error">{micError}</p>}
       {upcoming && <p className="sound-note">⏭ Mouvement suivant : « {upcoming.title} »…</p>}
-      {mode === "listen" && myFluteSound && !pianoOnly && <p className="sound-note">🎙️ Son : votre flûte</p>}
+      {mode === "listen" && myFluteSound && !pianoOnly && <p className="sound-note">🎙️ Son : votre flûte{isMyFluteOnly() ? " (uniquement)" : ""}</p>}
       {pianoOnly && (
         <p className="sound-note">🎹 Partition pour piano : appuyez sur « Écouter » pour l'entendre au piano.</p>
       )}

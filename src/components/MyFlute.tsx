@@ -7,6 +7,8 @@ import {
   recordTake,
   saveTake,
   setMyFluteEnabled,
+  isMyFluteOnly,
+  setMyFluteOnly,
   TAKE_SECONDS,
   TARGET_NOTES,
   type StoredTake,
@@ -24,6 +26,7 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
   const [level, setLevel] = useState(0);
   const [results, setResults] = useState<Record<number, { ok: boolean; text: string } | undefined>>({});
   const [enabled, setEnabled] = useState(isMyFluteEnabled);
+  const [only, setOnly] = useState(isMyFluteOnly);
   const [error, setError] = useState<string | null>(null);
   const playCtx = useRef<AudioContext | null>(null);
 
@@ -100,7 +103,8 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
         <p>
           Apprenez à l'application le son de <b>votre</b> flûte : jouez chaque note bien tenue, pendant {TAKE_SECONDS}{" "}
           secondes, dans une pièce calme, à 30–50 cm du micro. Ensuite, <b>🔊 Écouter</b> joue toutes les partitions avec
-          votre son (les notes manquantes viennent de la flûte de référence).
+          votre son : chaque note de la partition est jouée à partir de la note enregistrée la plus proche. Plus
+          vous enregistrez de notes, plus le son est naturel.
         </p>
         <p className="muted">
           Les enregistrements sont gardés dans l'application, sur cet appareil (ils ne sont envoyés nulle part) : ils
@@ -117,6 +121,18 @@ export function MyFlute({ onBack }: { onBack: () => void }) {
             }}
           />
           Utiliser ma flûte pour « Écouter »
+        </label>
+        <label className="toggle" title="Sinon, les notes éloignées de vos enregistrements (plus de 3 demi-tons) sont jouées par la flûte de référence">
+          <input
+            type="checkbox"
+            checked={only}
+            disabled={!enabled}
+            onChange={(e) => {
+              setOnly(e.target.checked);
+              setMyFluteOnly(e.target.checked);
+            }}
+          />
+          Uniquement ma flûte (jamais la flûte de référence)
         </label>
         {error && <p className="message error">{error}</p>}
       </section>

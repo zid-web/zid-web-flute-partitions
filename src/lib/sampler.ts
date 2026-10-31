@@ -58,12 +58,13 @@ export function sustainEnd(data: Float32Array, sampleRate: number): number {
 
 /**
  * « Ma flûte » d'abord : une note enregistrée par l'utilisateur à 3 demi-tons au plus ;
- * sinon la flûte de référence.
+ * sinon la flûte de référence. `only` (uniquement ma flûte) : toujours la note enregistrée la
+ * plus proche, quelle que soit la distance.
  */
-export function chooseSource(midi: number, mine: number[], reference: number[]): { mine: boolean; sample: number } {
+export function chooseSource(midi: number, mine: number[], reference: number[], only = false): { mine: boolean; sample: number } {
   if (mine.length) {
     const { sample } = pickSample(midi, mine);
-    if (Math.abs(sample - midi) <= MY_FLUTE_REACH) return { mine: true, sample };
+    if (only || Math.abs(sample - midi) <= MY_FLUTE_REACH) return { mine: true, sample };
   }
   return { mine: false, sample: pickSample(midi, reference).sample };
 }
@@ -86,7 +87,12 @@ export class SampledFlute implements FlutePlayer {
   private mine = new Map<number, { buffer: AudioBuffer; cents: number }>();
   private myNotes: number[] = [];
 
-  private constructor(ctx: BaseAudioContext, private buffers: Map<number, AudioBuffer>, takes: StoredTake[]) {
+  private constructor(
+    ctx: BaseAudioContext,
+    private buffers: Map<number, AudioBuffer>,
+    takes: StoredTake[],
+    private only = false,
+  ) {
     this.ctx = ctx;
     this.notes = [...buffers.keys()].sort((a, b) => a - b);
     for (const take of takes) {
@@ -126,6 +132,7 @@ export class SampledFlute implements FlutePlayer {
     ctx: BaseAudioContext = new AudioContext({ latencyHint: "playback" }),
     baseUrl = import.meta.env.BASE_URL,
     takes: StoredTake[] = [],
+    only = false,
   ) {
     const dir = `${baseUrl}samples/flute/`;
     const notes = (await (await fetch(`${dir}notes.json`)).json()) as number[];
@@ -136,7 +143,7 @@ export class SampledFlute implements FlutePlayer {
         return [midi, await ctx.decodeAudioData(await res.arrayBuffer())] as const;
       }),
     );
-    return new SampledFlute(ctx, new Map(entries), takes);
+    return new SampledFlute(ctx, new Map(entries), takes, only);
   }
 
   async resume(): Promise<void> {
@@ -205,7 +212,7 @@ export class SampledFlute implements FlutePlayer {
     velocity?: number,
     gate?: number,
   ): void {
-    const source = chooseSource(midi, this.myNotes, this.notes);
+    const source = chooseSource(midi, this.myNotes, this.notes, this.only);
     const mine = source.mine ? this.mine.get(source.sample) : undefined;
     const buffer = mine?.buffer ?? this.buffers.get(source.sample);
     if (!buffer) return;
@@ -228,7 +235,8 @@ export class SampledFlute implements FlutePlayer {
     let offset = slurredIn ? 0.05 : 0; // en legato, on saute le début de l'attaque
     let first = true;
     while (start < end + 0.2) {
-      const usable = (held - offset) / rate; // secondes de son tenu utilisables
+      // secondes de son tenu utilisables (au moins de quoi enchaîner, même très transposé)
+      const usable = Math.max(3 * CROSSFADE, (held - offset) / rate);
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       src.playbackRate.value = rate;
