@@ -21,7 +21,7 @@ export interface FlutePlayer {
    * Programme une autre voix (2ᵉ flûte d'un duo) : `t0` = heure audio du temps `origin` de la
    * partition, `speed` = tempo choisi / tempo écrit ; les notes hors de [origin, until[ sont ignorées.
    */
-  scheduleAt(notes: PianoNote[], t0: number, opts?: { origin?: number; until?: number; speed?: number }): void;
+  scheduleAt(notes: PianoNote[], t0: number, opts?: { origin?: number; until?: number; speed?: number; late?: number }): void;
   stop(): void;
   close(): void;
 }
@@ -168,11 +168,11 @@ export class SampledFlute implements FlutePlayer {
     this.note(midi, this.ctx.currentTime + 0.02, durationSec, false, false);
   }
 
-  scheduleAt(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1 } = {}): void {
+  scheduleAt(notes: PianoNote[], t0: number, { origin = 0, until = Infinity, speed = 1, late = 0.01 } = {}): void {
     notes.forEach((n, i) => {
       if (n.startSec < origin - 1e-6 || n.startSec >= until - 1e-6) return;
       const at = t0 + (n.startSec - origin) / speed;
-      if (at < this.ctx.currentTime - 0.01) return;
+      if (at < this.ctx.currentTime - late) return;
       const slurredIn = Boolean(notes[i - 1]?.slurred);
       this.note(n.midi, Math.max(at, this.ctx.currentTime), n.seconds / speed, Boolean(n.slurred), slurredIn, n.velocity, n.gate);
     });

@@ -61,6 +61,16 @@ export class ScoreFollower {
     private options: FollowerOptions = DEFAULT_FOLLOWER_OPTIONS,
   ) {}
 
+  /**
+   * Instant (ms, horloge des détections) où la dernière note validée a commencé à sonner juste :
+   * son attaque, un peu avant sa validation (`holdMs` plus tard). Sert à caler l'accompagnement.
+   */
+  get lastOnsetMs(): number | null {
+    return this.onsetMs;
+  }
+
+  private onsetMs: number | null = null;
+
   get position(): number {
     return this.index;
   }
@@ -128,6 +138,7 @@ export class ScoreFollower {
       if (frame.timeMs - this.candidateSince < this.options.holdMs) return [];
 
       const hitIndex = this.index;
+      this.onsetMs = this.candidateSince;
       this.index += 1;
       this.candidateSince = null;
       this.sustainMidi = target;

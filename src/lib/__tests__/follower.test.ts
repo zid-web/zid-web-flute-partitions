@@ -97,3 +97,15 @@ describe("ScoreFollower", () => {
     expect(starsFor(20, 10)).toBe(1);
   });
 });
+
+describe("instant d'attaque de la note validée", () => {
+  it("est celui de la première détection juste, pas celui de la validation", () => {
+    const f = new ScoreFollower([69]);
+    expect(f.lastOnsetMs).toBeNull();
+    f.push({ midi: 69, timeMs: 1000 });
+    f.push({ midi: 69, timeMs: 1050 });
+    const ev = f.push({ midi: 69, timeMs: 1100 });
+    expect(ev[0]).toEqual({ type: "hit", index: 0 });
+    expect(f.lastOnsetMs).toBe(1000);
+  });
+});
