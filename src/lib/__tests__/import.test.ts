@@ -4,7 +4,7 @@ import { join } from "node:path";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { analyseScore, parseMusicXml } from "../difficulty";
-import { partnersOf, splitAccompaniment } from "../accompaniment";
+import { melodyNotes, partnersOf, pianoNotes, splitAccompaniment } from "../accompaniment";
 import { prepareImport, readScoreBytes } from "../import";
 
 const SCORES = join(__dirname, "../../../public/scores");
@@ -67,6 +67,34 @@ describe("import d'une partition", () => {
     expect(duo.entry.partners).toEqual(["flute"]);
     expect(partnersOf(duo.entry)).toEqual(["flute"]);
     expect(partnersOf({ kind: "flute-piano" })).toEqual(["piano"]); // partitions importées avant les duos
+  });
+
+  it("deux flûtes sur une portée (deux voix) : la voix du haut pour l'élève, l'autre jouée par l'application", () => {
+    const v = (step: string, octave: number, dur: number, voice: number) =>
+      `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${dur}</duration><voice>${voice}</voice></note>`;
+    const rest = (dur: number, voice: number) => `<note><rest/><duration>${dur}</duration><voice>${voice}</voice></note>`;
+    const back = (dur: number) => `<backup><duration>${dur}</duration></backup>`;
+    const xml = `<?xml version="1.0"?><score-partwise><part-list><score-part id="P1"><part-name>Flûtes</part-name></score-part></part-list>
+<part id="P1">
+<measure number="1"><attributes><divisions>1</divisions></attributes><sound tempo="60"/>${v("E", 5, 2, 1)}${v("G", 5, 2, 1)}${back(4)}${v("C", 5, 2, 2)}${v("E", 5, 2, 2)}</measure>
+<measure number="2">${rest(4, 1)}${back(4)}${v("D", 5, 4, 2)}</measure>
+<measure number="3">${v("C", 6, 4, 1)}</measure>
+</part></score-partwise>`;
+    const { entry, xml: mine, accompaniment, warnings } = prepareImport(xml, "duo-une-portee.xml");
+    expect(warnings).toEqual([]); // plus de « plusieurs voix superposées »
+    expect(entry.partners).toEqual(["flute"]);
+    expect(entry.tags).toContain("duo de flûtes");
+    // vous : la voix du haut (Mi5 Sol5, silence, Do6) ; le rythme et la durée du morceau sont gardés
+    expect(melodyNotes(mine).length).toBe(3);
+    expect(pianoNotes(mine).map((n) => [n.midi, n.startSec])).toEqual([[76, 0], [79, 2], [84, 8]]);
+    // l'application : la voix du bas, au même tempo
+    const { flute } = splitAccompaniment(accompaniment!);
+    expect(flute.map((n) => [n.midi, n.startSec])).toEqual([[72, 0], [76, 2], [74, 4]]);
+    // une 2ᵉ voix faite seulement de silences : retirée, sans 2ᵉ flûte ni avertissement
+    const restsOnly = xml.replace(/<note><pitch><step>[CED]<\/step><octave>5<\/octave><\/pitch><duration>(\d)<\/duration><voice>2<\/voice><\/note>/g, "<note><rest/><duration>$1</duration><voice>2</voice></note>");
+    const single = prepareImport(restsOnly, "x.xml");
+    expect(single.warnings).toEqual([]);
+    expect(single.entry.partners).toBeUndefined();
   });
 
   it("sans flûte mais avec un piano : partition pour piano seul", () => {

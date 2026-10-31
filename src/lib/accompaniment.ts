@@ -149,6 +149,108 @@ export function partnersOf(entry: { partners?: Partner[]; kind?: string }): Part
   return entry.partners ?? (entry.kind === "flute-piano" ? ["piano"] : []);
 }
 
+// --- Deux voix sur une même portée de flûte -----------------------------------
+
+const voiceOf = (note: Element) => text(note, "voice") ?? "1";
+
+/** Longueur d'une mesure dans ses propres unités (divisions) : la plus longue de ses voix. */
+function rawMeasureLength(measure: Element): number {
+  let pos = 0;
+  let length = 0;
+  for (const el of Array.from(measure.children)) {
+    const d = Number(text(el, "duration") ?? 0);
+    if (el.localName === "backup") pos -= d;
+    else if (el.localName === "forward" || (el.localName === "note" && !child(el, "chord") && !child(el, "grace") && !child(el, "cue"))) {
+      pos += d;
+      length = Math.max(length, pos);
+    }
+  }
+  return length;
+}
+
+/**
+ * Ne garde qu'une voix dans une partie : retire les notes des autres voix et les retours en arrière
+ * (`<backup>`) ; une mesure devenue plus courte est complétée par un silence, pour que la partie
+ * garde exactement la même durée (le son et le curseur restent ensemble).
+ */
+function keepVoice(part: Element, voice: string): void {
+  for (const measure of children(part, "measure")) {
+    const before = rawMeasureLength(measure);
+    for (const el of Array.from(measure.children)) {
+      const other =
+        (el.localName === "note" && voiceOf(el) !== voice) ||
+        el.localName === "backup" ||
+        (el.localName === "forward" && text(el, "voice") !== undefined && text(el, "voice") !== voice);
+      if (other) el.remove();
+    }
+    const missing = before - rawMeasureLength(measure);
+    if (missing > 0) {
+      const doc = part.ownerDocument;
+      const ns = measure.namespaceURI;
+      const restNote = doc.createElementNS(ns, "note");
+      restNote.appendChild(doc.createElementNS(ns, "rest"));
+      const duration = doc.createElementNS(ns, "duration");
+      duration.textContent = String(missing);
+      const v = doc.createElementNS(ns, "voice");
+      v.textContent = voice;
+      restNote.append(duration, v);
+      measure.appendChild(restNote);
+    }
+  }
+}
+
+/**
+ * Deux flûtes écrites sur une même portée (deux voix) : la voix la plus aiguë reste pour l'élève,
+ * l'autre est renvoyée comme une partie « Flûte 2 », jouée par l'application. Une voix qui ne
+ * contient que des silences est simplement retirée. Modifie `doc` (une seule partie, la flûte).
+ */
+export function splitFluteVoices(doc: Document): Element | null {
+  const part = children(doc.documentElement, "part")[0];
+  if (!part) return null;
+  const pitches = new Map<string, number[]>();
+  const seen = new Set<string>();
+  for (const note of Array.from(part.getElementsByTagName("note"))) {
+    seen.add(voiceOf(note));
+    const pitch = child(note, "pitch");
+    if (!pitch || child(note, "grace")) continue;
+    const step = text(pitch, "step") ?? "";
+    if (!(step in STEP)) continue;
+    const midi = (Number(text(pitch, "octave")) + 1) * 12 + STEP[step] + Math.round(Number(text(pitch, "alter") ?? 0));
+    pitches.set(voiceOf(note), [...(pitches.get(voiceOf(note)) ?? []), midi]);
+  }
+  const mean = (v: string) => (pitches.get(v) ?? []).reduce((a, b) => a + b, 0) / (pitches.get(v)?.length || 1);
+  const voices = [...pitches.keys()].sort((a, b) => mean(b) - mean(a));
+  const top = voices[0] ?? "1";
+  if (voices.length < 2) {
+    if (seen.size > 1) keepVoice(part, top); // voix de silences seulement : retirée
+    return null;
+  }
+  const second = part.cloneNode(true) as Element;
+  const id = `${part.getAttribute("id") ?? "P1"}-flute2`;
+  second.setAttribute("id", id);
+  keepVoice(part, top);
+  keepVoice(second, voices[1]);
+  return second;
+}
+
+/** Ajoute une partie « Flûte 2 » à un document (déclaration dans part-list comprise). */
+export function appendFlute2(doc: Document, part: Element): void {
+  const root = doc.documentElement;
+  const ns = root.namespaceURI;
+  let list = child(root, "part-list");
+  if (!list) {
+    list = doc.createElementNS(ns, "part-list");
+    root.insertBefore(list, children(root, "part")[0] ?? null);
+  }
+  const sp = doc.createElementNS(ns, "score-part");
+  sp.setAttribute("id", part.getAttribute("id") ?? "P-flute2");
+  const name = doc.createElementNS(ns, "part-name");
+  name.textContent = "Flûte 2";
+  sp.appendChild(name);
+  list.appendChild(sp);
+  root.appendChild(doc.importNode(part, true));
+}
+
 /** Y a-t-il une partie nommée flûte ? */
 export function hasFlutePart(doc: Document): boolean {
   return [...partNames(doc.documentElement).values()].some((name) => FLUTE.test(name));
