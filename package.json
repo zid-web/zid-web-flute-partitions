@@ -1,7 +1,7 @@
 {
   "name": "flute-partitions",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.12.4",
     "jszip": "3.10.1",
     "opensheetmusicdisplay": "1.9.9",
     "pitchy": "4.1.0",

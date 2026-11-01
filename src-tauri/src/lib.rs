@@ -1,7 +1,8 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Audiveris installé sur l'ordinateur (reconnaissance des partitions PDF), ou None.
 fn find_audiveris() -> Option<PathBuf> {
@@ -46,7 +47,15 @@ struct OmrFile {
     data: String,
 }
 
-fn run_audiveris(exe: &Path, pdf: &Path, out: &Path, sheet: Option<usize>) {
+/// Lignes du journal d'Audiveris utiles pour suivre l'avancement (pages, étapes, export).
+fn is_progress_line(line: &str) -> bool {
+    line.contains("StepMonitoring")
+        || line.contains("sheets in")
+        || line.contains("Book reaching")
+        || line.contains("Exporting")
+}
+
+fn run_audiveris(exe: &Path, pdf: &Path, out: &Path, sheet: Option<usize>, on_line: &dyn Fn(&str)) {
     let _ = std::fs::create_dir_all(out);
     let mut cmd = if cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none() {
         let mut c = Command::new("xvfb-run");
@@ -61,9 +70,20 @@ fn run_audiveris(exe: &Path, pdf: &Path, out: &Path, sheet: Option<usize>) {
     }
     cmd.arg("--")
         .arg(pdf)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let _ = cmd.status();
+    let Ok(mut child) = cmd.spawn() else {
+        return;
+    };
+    // Journal d'Audiveris lu au fil de l'eau : chaque page et chaque étape font avancer la barre.
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if is_progress_line(&line) {
+                on_line(&line);
+            }
+        }
+    }
+    let _ = child.wait();
 }
 
 fn collect_mxl(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -91,18 +111,29 @@ fn pdf_page_count(bytes: &[u8]) -> usize {
 /// MusicXML obtenus (un par morceau). Si l'export du fichier entier échoue (page de titre, scan
 /// abîmé…), recommence page par page et garde les pages réussies.
 #[tauri::command]
-async fn convert_pdf(name: String, data: String) -> Result<Vec<OmrFile>, String> {
+async fn convert_pdf(
+    app: tauri::AppHandle,
+    name: String,
+    data: String,
+) -> Result<Vec<OmrFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = STANDARD
             .decode(data)
             .map_err(|_| "Fichier PDF illisible.".to_string())?;
-        convert_pdf_bytes(&name, &bytes)
+        // avancement envoyé à l'écran d'import (événement « omr-progress »)
+        convert_pdf_bytes(&name, &bytes, &|line: &str| {
+            let _ = app.emit("omr-progress", line.to_string());
+        })
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn convert_pdf_bytes(name: &str, bytes: &[u8]) -> Result<Vec<OmrFile>, String> {
+fn convert_pdf_bytes(
+    name: &str,
+    bytes: &[u8],
+    on_line: &dyn Fn(&str),
+) -> Result<Vec<OmrFile>, String> {
     let exe = find_audiveris().ok_or("Audiveris n'est pas installé sur cet ordinateur.")?;
     let work = std::env::temp_dir().join(format!(
         "flute-omr-{}",
@@ -127,13 +158,15 @@ fn convert_pdf_bytes(name: &str, bytes: &[u8]) -> Result<Vec<OmrFile>, String> {
     std::fs::write(&pdf, bytes).map_err(|e| e.to_string())?;
 
     let mut found = Vec::new();
-    run_audiveris(&exe, &pdf, &work.join("tout"), None);
+    run_audiveris(&exe, &pdf, &work.join("tout"), None, on_line);
     collect_mxl(&work.join("tout"), &mut found);
     if found.is_empty() {
         let pages = pdf_page_count(bytes).clamp(1, 60);
         for n in 1..=pages {
             let out = work.join(format!("page{n:02}"));
-            run_audiveris(&exe, &pdf, &out, Some(n));
+            // reprise page par page : l'écran repart de la page n sur le total
+            on_line(&format!("RUN {n}/{pages}"));
+            run_audiveris(&exe, &pdf, &out, Some(n), on_line);
             let before = found.len();
             collect_mxl(&out, &mut found);
             // renommer par page, pour l'ordre des morceaux
@@ -178,7 +211,19 @@ mod tests {
     fn convertit_un_pdf() {
         let path = std::env::var("OMR_PDF").expect("OMR_PDF");
         let bytes = std::fs::read(&path).unwrap();
-        let files = convert_pdf_bytes(&path, &bytes).unwrap();
+        let lines = std::cell::RefCell::new(Vec::new());
+        let files = convert_pdf_bytes(&path, &bytes, &|l: &str| {
+            lines.borrow_mut().push(l.to_string())
+        })
+        .unwrap();
+        let lines = lines.into_inner();
+        println!(
+            "{} lignes d'avancement, dernière : {:?}",
+            lines.len(),
+            lines.last()
+        );
+        assert!(lines.iter().any(|l| l.contains("sheets in")));
+        assert!(lines.iter().any(|l| l.contains("StepMonitoring")));
         for f in &files {
             println!("{} : {} octets (base64)", f.name, f.data.len());
         }
