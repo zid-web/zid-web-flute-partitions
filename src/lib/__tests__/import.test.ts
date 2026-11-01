@@ -97,6 +97,48 @@ describe("import d'une partition", () => {
     expect(single.entry.partners).toBeUndefined();
   });
 
+  it("petite voix accidentelle (reconnaissance d'un PDF) : la mélodie reste à l'élève, entière", () => {
+    const v = (step: string, octave: number, dur: number, voice: number) =>
+      `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${dur}</duration><voice>${voice}</voice></note>`;
+    const m = (n: number, body: string) => `<measure number="${n}">${n === 1 ? "<attributes><divisions>1</divisions></attributes>" : ""}${body}</measure>`;
+    // voix 1 : 8 mesures de mélodie (grave) ; voix 2 : une seule mesure, seule et plus aiguë
+    const body = [1, 2, 3, 5, 6, 7, 8].map((n) => m(n, v("C", 5, 2, 1) + v("D", 5, 2, 1))).join("");
+    const xml = `<?xml version="1.0"?><score-partwise><part-list><score-part id="P1"><part-name>Flûte</part-name></score-part></part-list>
+<part id="P1">${body.replace('<measure number="5">', `${m(4, v("A", 6, 2, 2) + v("B", 6, 2, 2))}<measure number="5">`)}</part></score-partwise>`;
+    const { xml: mine, entry, warnings } = prepareImport(xml, "omr.xml");
+    expect(entry.partners).toBeUndefined(); // pas de 2ᵉ flûte
+    expect(warnings).toEqual([]);
+    const notes = pianoNotes(mine).map((n) => n.midi);
+    expect(notes).toHaveLength(16); // les 14 notes de la mélodie et les 2 de la mesure 4
+    expect(notes.slice(6, 8)).toEqual([93, 95]);
+  });
+
+  it("partition reconnue depuis un PDF (parties « Voice » rangées différemment selon le système)", () => {
+    const n = (step: string, octave: number, voice = 1) =>
+      `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>1</duration><voice>${voice}</voice></note>`;
+    const r = `<note><rest measure="yes"/><duration>4</duration><voice>1</voice></note>`;
+    const m = (num: number, body: string, newSystem = false) =>
+      `<measure number="${num}">${newSystem ? '<print new-system="yes"/>' : ""}${num === 1 ? "<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>" : ""}${body}</measure>`;
+    // système 1 (3 portées) : P1 vide, P2 = flûte, P3 = piano ; système 2 (4 portées) : P1 = flûte, P2 = piano m.d.
+    const xml = `<?xml version="1.0"?><score-partwise><part-list>
+<score-part id="P1"><part-name>Voice</part-name></score-part><score-part id="P2"><part-name>Voice</part-name></score-part>
+<score-part id="P3"><part-name>Piano</part-name></score-part></part-list>
+<part id="P1">${m(1, r)}${m(2, n("A", 5) + n("B", 5) + n("C", 6) + n("D", 6) + "<backup><duration>2</duration></backup>" + n("E", 4, 2), true)}</part>
+<part id="P2">${m(1, n("C", 5) + n("D", 5) + n("E", 5) + n("F", 5))}${m(2, n("C", 4) + n("E", 4) + n("G", 4) + n("C", 4), true)}</part>
+<part id="P3">${m(1, n("C", 3) + n("G", 3) + n("C", 3) + n("G", 3))}${m(2, r, true)}</part>
+</score-partwise>`;
+    const { entry, xml: mine, accompaniment, warnings } = prepareImport(xml, "omr.mxl");
+    expect(entry.kind).toBe("flute-piano");
+    // la flûte : P2 au 1er système, P1 au 2ᵉ (sans la petite voix 2 parasite)
+    expect(pianoNotes(mine).map((x) => x.midi)).toEqual([72, 74, 76, 77, 81, 83, 84, 86]);
+    expect(mine).not.toContain("Voice");
+    // le piano : P3, plus P2 au 2ᵉ système (là où elle n'était plus la flûte)
+    const piano = splitAccompaniment(accompaniment!).piano.map((x) => x.midi);
+    expect(piano).toEqual(expect.arrayContaining([48, 55, 60, 64, 67]));
+    expect(piano).not.toContain(72);
+    expect(warnings).toContain("partition reconnue automatiquement : des notes ou des rythmes peuvent être faux, relisez-la");
+  });
+
   it("sans flûte mais avec un piano : partition pour piano seul", () => {
     const { entry, xml, accompaniment, warnings } = prepareImport(DUET.replace("Flûte", "Violon"), "x.xml");
     expect(entry.kind).toBe("piano");

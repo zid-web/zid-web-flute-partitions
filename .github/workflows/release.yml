@@ -1,11 +1,22 @@
-# Publie les applications natives sur une Release GitHub quand on pousse un tag vX.Y.Z.
-#   git tag v0.1.0 && git push origin v0.1.0
+# Publie les applications natives sur une Release GitHub quand on pousse un tag vX.Y.Z
+#   git tag v0.2.0 && git push origin v0.2.0
+# ou à la main (Actions › Release › Run workflow) : version + plateformes ; le tag est créé
+# par la Release, sur le commit lancé.
 # Secrets facultatifs (signature) : voir README, section « Publier les applications ».
 name: Release
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version à publier (tag), ex. v0.2.0"
+        required: true
+      plateformes:
+        description: "Plateformes"
+        type: choice
+        options: [toutes, mac]
+        default: toutes
 
 permissions:
   contents: write
@@ -15,13 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-latest
-            args: --target universal-apple-darwin
-          - platform: windows-latest
-            args: ""
-          - platform: ubuntu-22.04
-            args: ""
+        include: ${{ fromJSON(inputs.plateformes == 'mac' && '[{"platform":"macos-latest","args":"--target universal-apple-darwin"}]' || '[{"platform":"macos-latest","args":"--target universal-apple-darwin"},{"platform":"windows-latest","args":""},{"platform":"ubuntu-22.04","args":""}]') }}
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -39,24 +44,43 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
       - run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      # Signature macOS : avec un certificat Apple Developer (secrets), l'app est signée et notarisée ;
+      # sans, signature « ad hoc » (sans certificat) — passer des variables vides ferait échouer la
+      # construction (« failed to import the signing certificate »).
+      - name: Signature macOS
+        if: matrix.platform == 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signature macOS (facultative, sinon l'app n'est pas notarisée)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signature avec le certificat Apple Developer"
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              if [ -n "$(printenv "$v")" ]; then
+                { echo "$v<<FIN_SECRET"; printenv "$v"; echo "FIN_SECRET"; } >> "$GITHUB_ENV"
+              fi
+            done
+          else
+            echo "Pas de certificat Apple : signature ad hoc"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Flûte Partitions ${{ github.ref_name }}"
+          tagName: ${{ inputs.version || github.ref_name }}
+          releaseName: "Flûte Partitions ${{ inputs.version || github.ref_name }}"
+          releaseCommitish: ${{ github.sha }}
           releaseBody: "Téléchargez le fichier correspondant à votre système ci-dessous."
           releaseDraft: true
           args: ${{ matrix.args }}
 
   android:
+    if: inputs.plateformes != 'mac'
     runs-on: ubuntu-latest
     env:
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE != '' }}
@@ -105,8 +129,9 @@ jobs:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --apk --debug
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           draft: true
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
@@ -114,7 +139,7 @@ jobs:
 
   ios:
     # iOS exige un compte Apple Developer : le job ne tourne que si l'équipe est configurée.
-    if: vars.APPLE_DEVELOPMENT_TEAM != ''
+    if: vars.APPLE_DEVELOPMENT_TEAM != '' && inputs.plateformes != 'mac'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +162,8 @@ jobs:
           npx tauri ios init
           npx tauri ios build --export-method app-store-connect
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           draft: true
           files: src-tauri/gen/apple/build/**/*.ipa
