@@ -44,16 +44,33 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
       - run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      # Signature macOS : avec un certificat Apple Developer (secrets), l'app est signée et notarisée ;
+      # sans, signature « ad hoc » (sans certificat) — passer des variables vides ferait échouer la
+      # construction (« failed to import the signing certificate »).
+      - name: Signature macOS
+        if: matrix.platform == 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signature macOS (facultative, sinon l'app n'est pas notarisée)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signature avec le certificat Apple Developer"
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              if [ -n "$(printenv "$v")" ]; then
+                { echo "$v<<FIN_SECRET"; printenv "$v"; echo "FIN_SECRET"; } >> "$GITHUB_ENV"
+              fi
+            done
+          else
+            echo "Pas de certificat Apple : signature ad hoc"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ inputs.version || github.ref_name }}
           releaseName: "Flûte Partitions ${{ inputs.version || github.ref_name }}"
