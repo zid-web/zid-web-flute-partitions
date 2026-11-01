@@ -3,6 +3,9 @@
  * (Mac, Windows, Linux) — tout reste sur l'appareil, aucun envoi. Dans le navigateur et sur
  * téléphone, Audiveris ne peut pas tourner : on explique comment convertir le PDF soi-même.
  */
+import { listen } from "@tauri-apps/api/event";
+import { OmrProgressTracker, type OmrProgress } from "./omrProgress";
+
 type Invoke = (cmd: string, args?: object) => Promise<unknown>;
 
 function nativeInvoke(): Invoke | null {
@@ -42,12 +45,33 @@ function fromBase64(data: string): Uint8Array {
   return bytes;
 }
 
-/** Reconnaît un PDF avec Audiveris : un MusicXML compressé (.mxl) par morceau reconnu. */
-export async function convertPdf(file: File): Promise<{ name: string; bytes: Uint8Array }[]> {
+/**
+ * Reconnaît un PDF avec Audiveris : un MusicXML compressé (.mxl) par morceau reconnu.
+ * `onProgress` reçoit l'avancement (pages, étapes) lu dans le journal d'Audiveris.
+ */
+export async function convertPdf(
+  file: File,
+  onProgress?: (p: OmrProgress) => void,
+): Promise<{ name: string; bytes: Uint8Array }[]> {
   const invoke = nativeInvoke();
   if (!invoke) throw new Error(PDF_HELP_WEB);
   if (!(await audiverisPath())) throw new Error(PDF_HELP_NO_AUDIVERIS);
   const data = toBase64(new Uint8Array(await file.arrayBuffer()));
-  const files = (await invoke("convert_pdf", { name: file.name, data })) as { name: string; data: string }[];
-  return files.map((f) => ({ name: f.name, bytes: fromBase64(f.data) }));
+  const tracker = new OmrProgressTracker();
+  const stop = onProgress
+    ? await listen<string>("omr-progress", (e) => {
+        const p = tracker.line(e.payload);
+        if (p) onProgress(p);
+      }).catch(() => () => {})
+    : () => {};
+  try {
+    const files = (await invoke("convert_pdf", { name: file.name, data })) as { name: string; data: string }[];
+    return files.map((f) => ({ name: f.name, bytes: fromBase64(f.data) }));
+  } finally {
+    try {
+      stop();
+    } catch {
+      /* écoute déjà terminée */
+    }
+  }
 }
