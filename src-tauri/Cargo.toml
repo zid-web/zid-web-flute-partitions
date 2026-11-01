@@ -1,6 +1,6 @@
 [package]
 name = "flute-partitions"
-version = "0.1.0"
+version = "0.2.0"
 description = "Partitions de flûte interactives"
 edition = "2021"
 
