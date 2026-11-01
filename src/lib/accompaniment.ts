@@ -227,6 +227,9 @@ function keepVoice(part: Element, voice: string): void {
   }
 }
 
+/** Part minimale des notes d'une voix (par rapport à la plus fournie) pour être une vraie 2ᵉ flûte. */
+const MIN_VOICE_SHARE = 0.3;
+
 /**
  * Deux flûtes écrites sur une même portée (deux voix) : la voix la plus aiguë reste pour l'élève,
  * l'autre est renvoyée comme une partie « Flûte 2 », jouée par l'application. Une voix qui ne
@@ -247,10 +250,32 @@ export function splitFluteVoices(doc: Document): Element | null {
     pitches.set(voiceOf(note), [...(pitches.get(voiceOf(note)) ?? []), midi]);
   }
   const mean = (v: string) => (pitches.get(v) ?? []).reduce((a, b) => a + b, 0) / (pitches.get(v)?.length || 1);
-  const voices = [...pitches.keys()].sort((a, b) => mean(b) - mean(a));
+  const count = (v: string) => pitches.get(v)?.length ?? 0;
+  const most = Math.max(0, ...[...pitches.keys()].map(count));
+  // Une vraie 2ᵉ flûte a à peu près autant de notes que la 1ʳᵉ. Une petite voix de quelques notes
+  // est un accident de reconnaissance (OMR) : ce n'est ni la voix de l'élève, ni une 2ᵉ flûte.
+  const voices = [...pitches.keys()].filter((v) => count(v) >= MIN_VOICE_SHARE * most).sort((a, b) => mean(b) - mean(a));
   const top = voices[0] ?? "1";
   if (voices.length < 2) {
-    if (seen.size > 1) keepVoice(part, top); // voix de silences seulement : retirée
+    if (seen.size > 1) {
+      // Mesures où seule la petite voix joue : ses notes reviennent à la voix principale.
+      for (const measure of children(part, "measure")) {
+        const notes = children(measure, "note");
+        if (notes.some((n) => voiceOf(n) === top)) continue;
+        const others = new Set(notes.map(voiceOf));
+        if (others.size !== 1) continue;
+        for (const n of notes) {
+          let v = child(n, "voice");
+          if (!v) {
+            // à sa place dans MusicXML : juste après la durée
+            v = n.ownerDocument.createElementNS(n.namespaceURI, "voice");
+            n.insertBefore(v, child(n, "duration")?.nextSibling ?? null);
+          }
+          v.textContent = top;
+        }
+      }
+      keepVoice(part, top); // le reste (silences, notes en trop) : retiré
+    }
     return null;
   }
   const second = part.cloneNode(true) as Element;
