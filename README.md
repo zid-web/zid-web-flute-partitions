@@ -93,8 +93,11 @@ Android : après `tauri android init`, ajouter la permission micro dans
 
 ### Publier les applications
 
-Pousser un tag : `git tag v0.1.0 && git push origin v0.1.0`. Le workflow **Release** crée un brouillon
-de Release GitHub avec les installeurs Windows, macOS (universel), Linux et l'APK Android.
+Pousser un tag : `git tag v0.2.0 && git push origin v0.2.0`, ou lancer le workflow **Release** à la main
+(Actions › Release › Run workflow : version, et « mac » pour ne construire que l'application Mac). Il crée
+un brouillon de Release GitHub avec les installeurs Windows, macOS (universel), Linux et l'APK Android.
+Le numéro de version (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) doit
+correspondre au tag.
 
 | Plateforme | Ce qu'il faut | Secrets / variables GitHub |
 |---|---|---|
