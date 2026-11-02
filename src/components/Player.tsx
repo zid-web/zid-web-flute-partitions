@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Accompanist } from "../lib/accompanist";
 import {
+  countIn,
+  nextLoopTempo,
+  RhythmTracker,
+  rhythmSummary,
+  stepRange,
+  type RhythmReport,
+  type RhythmVerdict,
+} from "../lib/practice";
+import {
   expandOrnament,
   melodyNotes,
   withPartnerFlutes,
@@ -49,6 +58,17 @@ interface AudioBundle {
 let handoff: AudioBundle | null = null;
 
 const CHAIN_KEY = "flute-partitions:chain-movements";
+const COUNT_IN_KEY = "flute-partitions:decompte";
+function loadCountIn(): boolean {
+  try {
+    return localStorage.getItem(COUNT_IN_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+const RHYTHM_LABELS: Record<RhythmVerdict, string> = { early: "⏩ en avance", on: "✓ à l'heure", late: "⏪ en retard" };
+
 function loadChain(): boolean {
   try {
     return localStorage.getItem(CHAIN_KEY) !== "off";
@@ -116,6 +136,27 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const [hasFlute2, setHasFlute2] = useState(false);
   const [flute2On, setFlute2On] = useState(true);
 
+  // Outils de travail : décompte, boucle sur un passage (tempo progressif), rythme.
+  const [countInOn, setCountInOn] = useState(loadCountIn);
+  const [loopOn, setLoopOn] = useState(false);
+  const [loopFrom, setLoopFrom] = useState(1);
+  const [loopTo, setLoopTo] = useState(4);
+  const [progressive, setProgressive] = useState(true);
+  const [targetTempo, setTargetTempo] = useState(120);
+  const [measureCount, setMeasureCount] = useState(1);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [rhythmFlash, setRhythmFlash] = useState<RhythmVerdict | null>(null);
+  const [finalRhythm, setFinalRhythm] = useState<RhythmReport | null>(null);
+  const [passInfo, setPassInfo] = useState<string | null>(null);
+  /** Réglages lus pendant le jeu (le micro et les minuteries gardent les mêmes fonctions). */
+  const practiceRef = useRef({ countInOn, loopOn, loopFrom, loopTo, progressive, targetTempo, tempo: 120 });
+  /** Passage joué : première et dernière note (tout le morceau hors boucle). */
+  const rangeRef = useRef({ first: 0, last: 0 });
+  /** Pendant le décompte (et entre deux passages), le micro est ignoré. */
+  const countingRef = useRef(false);
+  const rhythmRef = useRef<RhythmTracker | null>(null);
+  const passRef = useRef({ n: 0, wrong: 0 });
+
   // Zoom et mode pupitre pour utilisation en local sur ordinateur
   const [zoom, setZoom] = useState(1.0);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -161,6 +202,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [zoom, applyZoom, toggleFullscreen]);
 
+  practiceRef.current = { countInOn, loopOn, loopFrom, loopTo, progressive, targetTempo, tempo };
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
   modeRef.current = mode;
@@ -218,6 +260,11 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         const written = Math.round(controller.tempo);
         setWrittenTempo(written);
         setTempo(written);
+        setTargetTempo(written);
+        const measures = controller.measureCount;
+        setMeasureCount(measures);
+        setLoopFrom(1);
+        setLoopTo(Math.min(4, measures));
         setLoading(false);
       })
       .catch((e: Error) => !cancelled && setLoadError(e.message));
@@ -246,6 +293,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     (wrongCount: number) => {
       const s = starsFor(total, wrongCount);
       setStars(s);
+      setFinalRhythm(rhythmRef.current?.report ?? null);
       setMode("finished");
       micRef.current?.stop();
       micRef.current = null;
@@ -261,6 +309,12 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       if (!score) return;
       for (const ev of events) {
         if (ev.type === "hit") {
+          if (practiceRef.current.loopOn && ev.index === rangeRef.current.last) {
+            score.color(ev.index, COLORS.hit);
+            setStep(ev.index + 1);
+            passDoneRef.current();
+            continue;
+          }
           score.color(ev.index, COLORS.hit);
           score.goToStep(ev.index + 1);
           setStep(ev.index + 1);
@@ -272,6 +326,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           });
         } else if (ev.type === "wrong") {
           wrongRef.current += 1;
+          passRef.current.wrong += 1;
           setWrong(wrongRef.current);
           setStreak(0);
           score.color(ev.index, COLORS.wrong);
@@ -279,12 +334,19 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
             if (followerRef.current?.position === ev.index) score.color(ev.index, COLORS.current);
           }, 450);
         } else if (ev.type === "finished") {
+          if (practiceRef.current.loopOn) continue; // en boucle : le passage recommence
           finish(wrongRef.current);
         }
       }
     },
     [finish],
   );
+
+  useEffect(() => {
+    if (!rhythmFlash) return;
+    const t = window.setTimeout(() => setRhythmFlash(null), 900);
+    return () => clearTimeout(t);
+  }, [rhythmFlash]);
 
   useEffect(() => {
     if (!praise) return;
@@ -313,6 +375,12 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     setBestStreak(0);
     setStars(null);
     setHeard(null);
+    setCountdown(null);
+    setRhythmFlash(null);
+    setFinalRhythm(null);
+    setPassInfo(null);
+    countingRef.current = false;
+    passRef.current = { n: 0, wrong: 0 };
     setMode("idle");
   }, [stopAccompanist]);
 
@@ -384,18 +452,160 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     a.acc.hit(index, onset);
   };
 
+  /** Passage à jouer : les mesures de la boucle, ou tout le morceau. */
+  const currentRange = () => {
+    const score = scoreRef.current;
+    const p = practiceRef.current;
+    const all = { first: 0, last: Math.max(0, (score?.steps.length ?? 1) - 1) };
+    if (!score || !p.loopOn) return all;
+    return stepRange(score.steps, p.loopFrom, p.loopTo) ?? all;
+  };
+
+  /**
+   * Décompte : une mesure de clics au tempo choisi, sur l'horloge audio (premier temps plus aigu),
+   * avec les chiffres à l'écran. Renvoie l'heure audio du premier temps du passage.
+   */
+  const playCountIn = (measure: number, quarterTempo: number): number | null => {
+    const ctx = audioRef.current?.ctx;
+    const score = scoreRef.current;
+    if (!ctx || !score) return null;
+    const meter = score.meters[measure] ?? { beats: 4, beatType: 4 };
+    const { clicks, beatSec } = countIn(meter.beats, meter.beatType, quarterTempo);
+    const t0 = ctx.currentTime + 0.3;
+    for (let k = 0; k < clicks; k++) {
+      const at = t0 + k * beatSec;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = k === 0 ? 1760 : 1320;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.35, at + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.07);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(at);
+      osc.stop(at + 0.08);
+      const delay = (at - ctx.currentTime) * 1000;
+      timersRef.current.push(window.setTimeout(() => setCountdown(clicks - k), Math.max(0, delay)));
+    }
+    const startAt = t0 + clicks * beatSec;
+    const untilStart = (startAt - ctx.currentTime) * 1000;
+    timersRef.current.push(
+      // un peu avant le premier temps : une attaque juste à l'heure est bien entendue
+      window.setTimeout(() => {
+        countingRef.current = false;
+      }, Math.max(0, untilStart - 150)),
+      window.setTimeout(() => setCountdown(null), Math.max(0, untilStart)),
+    );
+    return startAt;
+  };
+
+  /** Lance un passage : partition remise au début du passage, décompte, accompagnement. */
+  const beginPassRef = useRef<() => void>(() => {});
+  beginPassRef.current = () => {
+    const score = scoreRef.current;
+    const follower = followerRef.current;
+    if (!score || !follower || !micRef.current) return;
+    stopAccompanist();
+    synthRef.current?.stop();
+    pianoRef.current?.stop();
+    const p = practiceRef.current;
+    const range = currentRange();
+    rangeRef.current = range;
+    score.resetColors();
+    follower.reset(range.first);
+    score.goToStep(range.first);
+    setStep(range.first);
+    setStreak(0);
+    setHeard(null);
+    passRef.current = { n: passRef.current.n + 1, wrong: 0 };
+    const speed = p.tempo / score.tempo;
+    if (!rhythmRef.current || p.loopOn) rhythmRef.current = new RhythmTracker(score.steps.map((x) => x.startSec), speed);
+    rhythmRef.current.restart();
+    const measure = score.steps[range.first]?.measure ?? 0;
+    const startAt = p.countInOn ? playCountIn(measure, p.tempo) : null;
+    countingRef.current = startAt !== null;
+
+    const accompanied = (hasPiano && pianoOn) || (hasFlute2 && flute2On);
+    const clock = audioClock();
+    if (!accompanied || !clock || !score.steps[range.first]) return;
+    const acc = new Accompanist(
+      score.steps.map((x) => x.startSec),
+      speed,
+    );
+    let started = false;
+    if (startAt !== null) {
+      // après le décompte, l'accompagnement part du premier temps de la mesure, avec vous
+      acc.start(score.measureStartSec(measure), startAt, range.first);
+      started = true;
+    } else if (range.first === 0 && score.steps[0].startSec > 0.05) {
+      // introduction (avant votre première note) : l'accompagnement commence seul, au tempo choisi
+      acc.start(0, clock.now + 0.4);
+      started = true;
+    }
+    const piano = pianoRef.current;
+    const flute = synthRef.current;
+    const timer = window.setInterval(() => {
+      const c = audioClock();
+      const a = accompanistRef.current;
+      if (!c || !a?.started) return;
+      const w = a.acc.advance(c.now, LOOKAHEAD);
+      if (!w) return;
+      const opts = { origin: w.from, until: w.to, speed: a.acc.tempoRatio, late: 0.25 };
+      const t0 = a.acc.toAudio(w.from);
+      if (piano && pianoOn) piano.schedule(pianoNotesRef.current, t0, opts);
+      if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, t0, opts);
+    }, 25);
+    accompanistRef.current = { acc, started, timer };
+  };
+
+  /** Fin d'un passage de la boucle : bilan, tempo du passage suivant, et on recommence. */
+  const passDoneRef = useRef<() => void>(() => {});
+  passDoneRef.current = () => {
+    const p = practiceRef.current;
+    const report = rhythmRef.current?.report;
+    const wrongs = passRef.current.wrong;
+    const success = wrongs === 0 && (report?.percent ?? 100) >= 70;
+    const next = p.progressive ? nextLoopTempo(p.tempo, p.targetTempo, success) : p.tempo;
+    const parts = [
+      `Passage ${passRef.current.n} : ${wrongs ? `${wrongs} fausse${wrongs > 1 ? "s" : ""} note${wrongs > 1 ? "s" : ""}` : "aucune fausse note"}`,
+      report && report.evaluated ? `rythme ${report.percent} % à l'heure` : null,
+      next > p.tempo
+        ? `bravo, tempo ${p.tempo} → ${next}`
+        : p.progressive && p.tempo >= p.targetTempo && success
+          ? `objectif ♩ = ${p.targetTempo} atteint 🎉`
+          : !success
+            ? "on recommence au même tempo"
+            : null,
+    ].filter(Boolean);
+    setPassInfo(parts.join(" · "));
+    if (next !== p.tempo) {
+      setTempo(next);
+      practiceRef.current = { ...p, tempo: next };
+    }
+    countingRef.current = true; // pause entre deux passages : le micro est ignoré
+    stopAccompanist();
+    timersRef.current.push(window.setTimeout(() => beginPassRef.current(), 1600));
+  };
+
   const startMic = useCallback(async () => {
     restart();
     setMicError(null);
     const accompanied = (hasPiano && pianoOn) || (hasFlute2 && flute2On);
-    if (accompanied) await ensureAudio();
+    if (accompanied || practiceRef.current.countInOn) await ensureAudio();
+    rhythmRef.current = null;
     const mic = new MicPitchSource(
       (r) => {
+        if (countingRef.current) return; // décompte en cours : on attend le premier temps
         setHeard(r.midi);
         const follower = followerRef.current;
         if (!follower) return;
         const events = follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level });
-        for (const ev of events) if (ev.type === "hit") accompanyHit(ev.index, follower.lastOnsetMs);
+        for (const ev of events) {
+          if (ev.type !== "hit") continue;
+          accompanyHit(ev.index, follower.lastOnsetMs);
+          // rythme : instant d'attaque comparé à l'instant attendu d'après votre tempo
+          const judged = follower.lastOnsetMs !== null ? rhythmRef.current?.hit(ev.index, follower.lastOnsetMs / 1000) : null;
+          if (judged) setRhythmFlash(judged.verdict);
+        }
         handleEvents(events);
       },
       undefined,
@@ -406,32 +616,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       await mic.start();
       micRef.current = mic;
       setMode("mic");
-      const score = scoreRef.current;
-      const clock = audioClock();
-      if (accompanied && score?.steps[0] && clock) {
-        const acc = new Accompanist(
-          score.steps.map((s) => s.startSec),
-          tempo / score.tempo,
-        );
-        // Introduction (avant votre première note) : l'accompagnement commence seul, au tempo choisi.
-        // Sinon, il démarre avec votre première note.
-        const intro = score.steps[0].startSec > 0.05;
-        if (intro) acc.start(0, clock.now + 0.4);
-        const piano = pianoRef.current;
-        const flute = synthRef.current;
-        const timer = window.setInterval(() => {
-          const c = audioClock();
-          const a = accompanistRef.current;
-          if (!c || !a?.started) return;
-          const w = a.acc.advance(c.now, LOOKAHEAD);
-          if (!w) return;
-          const opts = { origin: w.from, until: w.to, speed: a.acc.tempoRatio, late: 0.25 };
-          const t0 = a.acc.toAudio(w.from);
-          if (piano && pianoOn) piano.schedule(pianoNotesRef.current, t0, opts);
-          if (flute && flute2On) flute.scheduleAt(flute2NotesRef.current, t0, opts);
-        }, 25);
-        accompanistRef.current = { acc, started: intro, timer };
-      }
+      beginPassRef.current();
     } catch (e) {
       setMicError(
         e instanceof DOMException && e.name === "NotAllowedError"
@@ -439,7 +624,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           : "Micro indisponible sur cet appareil.",
       );
     }
-  }, [handleEvents, restart, hasPiano, pianoOn, hasFlute2, flute2On, ensureAudio, tempo]);
+  }, [handleEvents, restart, hasPiano, pianoOn, hasFlute2, flute2On, ensureAudio]);
 
   /**
    * Mode Écouter : l'application joue le morceau à partir de la note `from`, et la partition défile.
@@ -447,7 +632,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
    * accélère ou les ralentit toutes dans la même proportion, comme la vitesse de lecture de MuseScore.
    */
   const playFrom = useCallback(
-    (from: number) => {
+    (from: number, to?: number) => {
       const score = scoreRef.current;
       const synth = synthRef.current;
       if (!score || !synth) return;
@@ -456,12 +641,15 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       cancelAnimationFrame(rafRef.current);
       synth.stop();
       pianoRef.current?.stop();
-      const steps = score.steps.slice(from);
+      const steps = score.steps.slice(from, to === undefined ? undefined : to + 1);
       if (steps.length === 0) return;
       const speed = tempo / score.tempo;
-      // Depuis le début : on part du début du morceau, pour jouer et montrer une introduction
-      // (2ᵉ flûte, piano) avant votre première note. Sinon : depuis la note en cours.
-      const origin = from === 0 ? 0 : steps[0].startSec;
+      // Boucle : du premier temps de la mesure ; depuis le début : du début du morceau, pour jouer
+      // et montrer une introduction (2ᵉ flûte, piano) avant votre première note ; sinon depuis la note.
+      const loopStart = to !== undefined ? score.measureStartSec(steps[0].measure) : null;
+      const origin = loopStart ?? (from === 0 ? 0 : steps[0].startSec);
+      // fin du passage en boucle : la fin de sa dernière note (piano et 2ᵉ flûte s'arrêtent là)
+      const until = to !== undefined ? steps[steps.length - 1].startSec + steps[steps.length - 1].seconds : Infinity;
       const at = (sec: number) => (sec - origin) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
       // Ce qui est écrit sur la partition : nuances, articulations, liaisons, ornements — si la
@@ -487,8 +675,8 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       });
       const t0 = pianoOnly ? synth.ctx.currentTime + 0.12 : synth.schedule(melody);
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
-      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, speed });
-      if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, speed });
+      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, until, speed });
+      if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, until, speed });
       // Le curseur suit l'horloge audio, pas des minuteries : à chaque image, on regarde l'instant
       // réellement entendu (latence de sortie de la carte son comprise) et on place le curseur sur
       // la note qui sonne. Si la page a été ralentie, il rattrape aussitôt au lieu d'accumuler du retard.
@@ -498,17 +686,23 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       const last = steps[steps.length - 1];
       // fin : après votre dernière note et après celle de la 2ᵉ flûte, si elle finit plus tard
       const flute2End = flute2On && !pianoOnly
-        ? Math.max(0, ...flute2NotesRef.current.map((n) => (n.startSec + n.seconds - origin) / speed))
+        ? Math.max(0, ...flute2NotesRef.current.filter((n) => n.startSec < until).map((n) => (Math.min(n.startSec + n.seconds, until) - origin) / speed))
         : 0;
       const endAt = t0 + Math.max(at(last.startSec) + last.seconds / speed, flute2End) + 0.3;
       let shown = -1; // dernière note affichée (indice dans `steps`)
       // Le curseur parcourt toutes les notes jouées (les vôtres et celles de la 2ᵉ flûte affichée),
       // même pendant vos silences ; la note « À jouer » et les couleurs restent sur votre partie.
-      const positions = score.positions.filter((p) => p.startSec >= origin - 1e-6);
+      const positions = score.positions.filter((p) => p.startSec >= origin - 1e-6 && p.startSec < until);
       const posStarts = positions.map((p) => t0 + at(p.startSec));
       let shownPos = -1;
       const tick = () => {
         const heardAt = ctx.currentTime - latency;
+        if (heardAt >= endAt && to !== undefined && practiceRef.current.loopOn) {
+          // boucle : on rejoue le passage après un court silence
+          score.resetColors();
+          timersRef.current.push(window.setTimeout(() => playFrom(from, to), 700));
+          return;
+        }
         if (heardAt >= endAt) {
           score.resetColors();
           score.goToStep(0);
@@ -564,8 +758,13 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     restart();
     await ensureAudio();
     setMode("listen");
-    listenStepRef.current = 0;
-    playFrom(0);
+    // boucle : le passage choisi, en continu ; sinon tout le morceau
+    const range = currentRange();
+    rangeRef.current = range;
+    listenStepRef.current = range.first;
+    if (practiceRef.current.loopOn) playFrom(range.first, range.last);
+    else playFrom(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restart, playFrom, ensureAudio]);
 
   // Mouvement enchaîné : l'écoute démarre dès que la partition est prête.
@@ -578,7 +777,9 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
 
   // Tempo changé pendant l'écoute : on repart de la note en cours à la nouvelle vitesse.
   useEffect(() => {
-    if (modeRef.current === "listen") playFrom(listenStepRef.current);
+    if (modeRef.current !== "listen") return;
+    if (practiceRef.current.loopOn) playFrom(rangeRef.current.first, rangeRef.current.last);
+    else playFrom(listenStepRef.current);
   }, [playFrom]);
 
   /** Sans flûte sous la main : valide la note attendue (entraînement / accessibilité). */
@@ -587,6 +788,12 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     const score = scoreRef.current;
     if (!follower || !score || follower.done) return;
     const index = follower.position;
+    if (countingRef.current) return;
+    if (practiceRef.current.loopOn && index === rangeRef.current.last) {
+      score.color(index, COLORS.hit);
+      passDoneRef.current();
+      return;
+    }
     follower.reset(index + 1);
     accompanyHit(index, performance.now());
     score.color(index, COLORS.hit);
@@ -651,6 +858,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           </span>
           <span>🔥 {streak}</span>
           <span>❌ {wrong}</span>
+          {rhythmFlash && <span className={`rhythm-flash ${rhythmFlash}`}>{RHYTHM_LABELS[rhythmFlash]}</span>}
         </div>
       </section>
 
@@ -731,6 +939,80 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           </label>
         )}
       </section>
+      {!pianoOnly && (
+        <section className="practice" aria-label="Outils de travail">
+          <label className="toggle" title="Une mesure de clics au tempo choisi avant de jouer">
+            <input
+              id="practice-count-in"
+              type="checkbox"
+              checked={countInOn}
+              onChange={(e) => {
+                setCountInOn(e.target.checked);
+                try {
+                  localStorage.setItem(COUNT_IN_KEY, e.target.checked ? "on" : "off");
+                } catch {
+                  /* préférence non mémorisée */
+                }
+              }}
+            />
+            🥁 Décompte
+          </label>
+          <label className="toggle" title="Rejouer un passage en boucle">
+            <input id="practice-loop" type="checkbox" checked={loopOn} onChange={(e) => setLoopOn(e.target.checked)} />
+            🔁 Boucle
+          </label>
+          {loopOn && (
+            <span className="loop-settings">
+              <label>
+                mesures
+                <input
+                  id="loop-from"
+                  type="number"
+                  min={1}
+                  max={measureCount}
+                  value={loopFrom}
+                  onChange={(e) => setLoopFrom(Math.max(1, Math.min(measureCount, Number(e.target.value) || 1)))}
+                />
+              </label>
+              <label>
+                à
+                <input
+                  id="loop-to"
+                  type="number"
+                  min={1}
+                  max={measureCount}
+                  value={loopTo}
+                  onChange={(e) => setLoopTo(Math.max(1, Math.min(measureCount, Number(e.target.value) || 1)))}
+                />
+              </label>
+              <label className="toggle" title={`Après chaque passage sans faute, le tempo monte de 4`}>
+                <input id="loop-progressive" type="checkbox" checked={progressive} onChange={(e) => setProgressive(e.target.checked)} />
+                ⏫ Tempo progressif
+              </label>
+              {progressive && (
+                <label>
+                  jusqu'à ♩ =
+                  <input
+                    id="loop-target"
+                    type="number"
+                    min={30}
+                    max={240}
+                    value={targetTempo}
+                    onChange={(e) => setTargetTempo(Math.max(30, Math.min(240, Number(e.target.value) || writtenTempo)))}
+                  />
+                </label>
+              )}
+            </span>
+          )}
+        </section>
+      )}
+      {loopOn && mode === "idle" && !pianoOnly && (
+        <p className="sound-note">
+          🔁 Mesures {Math.min(loopFrom, loopTo)} à {Math.max(loopFrom, loopTo)} en boucle.
+          {progressive && tempo < targetTempo && ` Commencez lentement (♩ = ${tempo}) : chaque passage sans faute, et assez régulier, fait monter le tempo de 4, jusqu'à ${targetTempo}.`}
+        </p>
+      )}
+      {passInfo && mode === "mic" && <p className="pass-info" role="status">{passInfo}</p>}
       {micError && <p className="message error">{micError}</p>}
       {upcoming && <p className="sound-note">⏭ Mouvement suivant : « {upcoming.title} »…</p>}
       {mode === "listen" && myFluteSound && !pianoOnly && <p className="sound-note">🎙️ Son : votre flûte{isMyFluteOnly() ? " (uniquement)" : ""}</p>}
@@ -749,6 +1031,12 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           🔍 Partition reconnue automatiquement à partir d'un PDF scanné : une note peut être fausse. En cas de doute,
           comparez avec l'original{entry.sourceUrl ? " sur IMSLP" : ""}.
         </p>
+      )}
+
+      {countdown !== null && (
+        <div className="countdown" aria-live="assertive">
+          <span key={countdown}>{countdown}</span>
+        </div>
       )}
 
       <section className="sheet">
@@ -774,6 +1062,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
             <p>
               {total} notes · {wrong} fausse{wrong > 1 ? "s" : ""} note{wrong > 1 ? "s" : ""} · meilleure série {bestStreak}
             </p>
+            {finalRhythm && <p className="rhythm-summary">⏱ {rhythmSummary(finalRhythm)}</p>}
             <div className="controls">
               <button className="primary" onClick={startMic}>
                 🎤 Rejouer

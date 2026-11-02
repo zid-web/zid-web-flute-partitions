@@ -1867,3 +1867,23 @@ button.link {
   max-width: calc(100vw - 32px); text-align: center; font-weight: 600; }
 .toast.undo { display: flex; align-items: center; gap: 0.9rem; }
 .toast.undo button { border: none; background: #fff; color: var(--primary); font-weight: 800; border-radius: var(--radius-full); padding: 0.25rem 0.8rem; }
+
+/* Outils de travail : décompte, boucle, rythme */
+.practice { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1rem; margin-top: 0.6rem; padding: 0.55rem 0.9rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); }
+.loop-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem; font-size: 0.9rem; color: var(--muted); }
+.loop-settings label { display: inline-flex; align-items: center; gap: 0.35rem; }
+.loop-settings input[type="number"] { width: 4.2rem; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.2rem 0.4rem; font-variant-numeric: tabular-nums; }
+.loop-settings input[type="number"]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.pass-info { margin: 0.5rem 0 0; padding: 0.45rem 0.8rem; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--ink); font-weight: 600; font-size: 0.92rem; }
+.rhythm-flash { font-size: 0.85rem; padding: 0.1rem 0.5rem; border-radius: var(--radius-full); width: fit-content; }
+.rhythm-flash.on { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.rhythm-flash.early, .rhythm-flash.late { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.rhythm-summary { font-weight: 600; }
+.countdown { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; z-index: 30; }
+.countdown span { font-size: clamp(5rem, 22vw, 11rem); font-weight: 800; color: var(--primary); opacity: 0.85;
+  text-shadow: 0 6px 30px color-mix(in srgb, var(--primary) 35%, transparent); animation: countdown-pop 0.45s ease-out; }
+@keyframes countdown-pop { from { transform: scale(1.5); opacity: 0; } to { transform: scale(1); opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) { .countdown span { animation: none; } }
