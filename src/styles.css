@@ -1887,3 +1887,6 @@ button.link {
   text-shadow: 0 6px 30px color-mix(in srgb, var(--primary) 35%, transparent); animation: countdown-pop 0.45s ease-out; }
 @keyframes countdown-pop { from { transform: scale(1.5); opacity: 0; } to { transform: scale(1); opacity: 0.85; } }
 @media (prefers-reduced-motion: reduce) { .countdown span { animation: none; } }
+.intonation-summary { text-align: left; max-width: 34rem; margin: 0 auto; }
+.intonation-summary p { font-weight: 600; margin: 0.25rem 0; }
+.intonation-summary ul { margin: 0.25rem 0 0; padding-left: 1.2rem; display: grid; gap: 0.2rem; font-size: 0.92rem; color: var(--ink-secondary); }

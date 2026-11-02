@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Accompanist } from "../lib/accompanist";
+import { mergeMarks, readExpressiveMarks, timeWarp } from "../lib/expressive";
+import { IntonationTracker, intonationSummary, type IntonationReport } from "../lib/intonation";
 import {
   countIn,
   nextLoopTempo,
@@ -155,6 +157,14 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   /** Pendant le décompte (et entre deux passages), le micro est ignoré. */
   const countingRef = useRef(false);
   const rhythmRef = useRef<RhythmTracker | null>(null);
+  const intonationRef = useRef(new IntonationTracker());
+  const [finalIntonation, setFinalIntonation] = useState<IntonationReport | null>(null);
+  /**
+   * Mode Écouter : points d'orgue et rit./rall./a tempo de la partition (et de l'accompagnement).
+   * `warp` donne l'instant joué d'un instant de la partition ; notes de l'accompagnement déjà placées.
+   */
+  const warpRef = useRef<(sec: number) => number>((s) => s);
+  const warpedRef = useRef<{ piano: PianoNote[]; flute2: PianoNote[] }>({ piano: [], flute2: [] });
   const passRef = useRef({ n: 0, wrong: 0 });
 
   // Zoom et mode pupitre pour utilisation en local sur ordinateur
@@ -232,15 +242,22 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         // Parties jouées par l'application : toute la partition (piano seul), ou l'accompagnement gardé
         // à l'import ou publié avec le morceau (piano et/ou 2ᵉ flûte).
         melodyRef.current = entry.kind === "piano" ? [] : melodyNotes(xml);
+        let accompanimentXml: string | null = null;
         if (entry.kind === "piano") {
           pianoNotesRef.current = pianoNotes(xml);
           flute2NotesRef.current = [];
         } else {
-          const accompaniment = await loadAccompanimentXml(entry).catch(() => null);
-          const parts = accompaniment ? splitAccompaniment(accompaniment) : { piano: [], flute: [] };
+          accompanimentXml = await loadAccompanimentXml(entry).catch(() => null);
+          const parts = accompanimentXml ? splitAccompaniment(accompanimentXml) : { piano: [], flute: [] };
           pianoNotesRef.current = parts.piano;
           flute2NotesRef.current = parts.flute;
         }
+        // Points d'orgue et rit./a tempo (mode Écouter) : votre partie et l'accompagnement.
+        const marks = mergeMarks(readExpressiveMarks(xml), ...(accompanimentXml ? [readExpressiveMarks(accompanimentXml)] : []));
+        const warp = timeWarp(marks);
+        const place = (n: PianoNote): PianoNote => ({ ...n, startSec: warp(n.startSec), seconds: warp(n.startSec + n.seconds) - warp(n.startSec) });
+        warpRef.current = warp;
+        warpedRef.current = { piano: pianoNotesRef.current.map(place), flute2: flute2NotesRef.current.map(place) };
         if (!cancelled) {
           setHasPiano(pianoNotesRef.current.length > 0);
           setHasFlute2(flute2NotesRef.current.length > 0);
@@ -294,6 +311,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       const s = starsFor(total, wrongCount);
       setStars(s);
       setFinalRhythm(rhythmRef.current?.report ?? null);
+      setFinalIntonation(intonationRef.current.report);
       setMode("finished");
       micRef.current?.stop();
       micRef.current = null;
@@ -378,6 +396,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     setCountdown(null);
     setRhythmFlash(null);
     setFinalRhythm(null);
+    setFinalIntonation(null);
     setPassInfo(null);
     countingRef.current = false;
     passRef.current = { n: 0, wrong: 0 };
@@ -568,6 +587,10 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     const parts = [
       `Passage ${passRef.current.n} : ${wrongs ? `${wrongs} fausse${wrongs > 1 ? "s" : ""} note${wrongs > 1 ? "s" : ""}` : "aucune fausse note"}`,
       report && report.evaluated ? `rythme ${report.percent} % à l'heure` : null,
+      (() => {
+        const worst = intonationRef.current.report.notes.find((x) => Math.abs(x.cents) >= 10);
+        return worst ? `justesse : ${worst.name} trop ${worst.cents > 0 ? "haut" : "bas"} (${worst.cents > 0 ? "+" : ""}${worst.cents} c)` : null;
+      })(),
       next > p.tempo
         ? `bravo, tempo ${p.tempo} → ${next}`
         : p.progressive && p.tempo >= p.targetTempo && success
@@ -592,6 +615,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     const accompanied = (hasPiano && pianoOn) || (hasFlute2 && flute2On);
     if (accompanied || practiceRef.current.countInOn) await ensureAudio();
     rhythmRef.current = null;
+    intonationRef.current.reset();
     const mic = new MicPitchSource(
       (r) => {
         if (countingRef.current) return; // décompte en cours : on attend le premier temps
@@ -599,8 +623,13 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         const follower = followerRef.current;
         if (!follower) return;
         const events = follower.push({ midi: r.midi, timeMs: r.timeMs, level: r.level });
+        // justesse de la note tenue (la dernière reconnue)
+        const held = follower.position - 1;
+        const heldStep = scoreRef.current?.steps[held];
+        if (heldStep && !events.some((e) => e.type === "hit")) intonationRef.current.frame(held, heldStep.midi, r.midi);
         for (const ev of events) {
           if (ev.type !== "hit") continue;
+          intonationRef.current.noteStarted(ev.index);
           accompanyHit(ev.index, follower.lastOnsetMs);
           // rythme : instant d'attaque comparé à l'instant attendu d'après votre tempo
           const judged = follower.lastOnsetMs !== null ? rhythmRef.current?.hit(ev.index, follower.lastOnsetMs / 1000) : null;
@@ -650,7 +679,10 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       const origin = loopStart ?? (from === 0 ? 0 : steps[0].startSec);
       // fin du passage en boucle : la fin de sa dernière note (piano et 2ᵉ flûte s'arrêtent là)
       const until = to !== undefined ? steps[steps.length - 1].startSec + steps[steps.length - 1].seconds : Infinity;
-      const at = (sec: number) => (sec - origin) / speed;
+      // Instants joués : points d'orgue et ralentis écrits (warp), puis tempo choisi (speed).
+      const W = warpRef.current;
+      const at = (sec: number) => (W(sec) - W(origin)) / speed;
+      const span = (start: number, seconds: number) => (W(start + seconds) - W(start)) / speed;
       // Le son est programmé sur l'horloge audio (rythme exact) ; l'affichage suit avec des minuteries.
       // Ce qui est écrit sur la partition : nuances, articulations, liaisons, ornements — si la
       // partition et le curseur comptent les mêmes notes (sinon, par prudence, jeu neutre).
@@ -667,7 +699,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         return (w?.ornament ? expandOrnament(note, w.ornament) : [note]).map((n) => ({
           midi: n.midi,
           start: at(n.startSec),
-          duration: n.seconds / speed,
+          duration: span(n.startSec, n.seconds),
           velocity: n.velocity,
           gate: n.gate,
           slurred: n.slurred,
@@ -675,8 +707,10 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       });
       const t0 = pianoOnly ? synth.ctx.currentTime + 0.12 : synth.schedule(melody);
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
-      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(pianoNotesRef.current, t0, { origin, until, speed });
-      if (flute2On && !pianoOnly) synth.scheduleAt(flute2NotesRef.current, t0, { origin, until, speed });
+      // accompagnement déjà placé sur le temps joué (points d'orgue, ralentis)
+      const placed = { origin: W(origin), until: until === Infinity ? Infinity : W(until), speed };
+      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(warpedRef.current.piano, t0, placed);
+      if (flute2On && !pianoOnly) synth.scheduleAt(warpedRef.current.flute2, t0, placed);
       // Le curseur suit l'horloge audio, pas des minuteries : à chaque image, on regarde l'instant
       // réellement entendu (latence de sortie de la carte son comprise) et on place le curseur sur
       // la note qui sonne. Si la page a été ralentie, il rattrape aussitôt au lieu d'accumuler du retard.
@@ -686,9 +720,9 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       const last = steps[steps.length - 1];
       // fin : après votre dernière note et après celle de la 2ᵉ flûte, si elle finit plus tard
       const flute2End = flute2On && !pianoOnly
-        ? Math.max(0, ...flute2NotesRef.current.filter((n) => n.startSec < until).map((n) => (Math.min(n.startSec + n.seconds, until) - origin) / speed))
+        ? Math.max(0, ...flute2NotesRef.current.filter((n) => n.startSec < until).map((n) => at(Math.min(n.startSec + n.seconds, until))))
         : 0;
-      const endAt = t0 + Math.max(at(last.startSec) + last.seconds / speed, flute2End) + 0.3;
+      const endAt = t0 + Math.max(at(last.startSec) + span(last.startSec, last.seconds), flute2End) + 0.3;
       let shown = -1; // dernière note affichée (indice dans `steps`)
       // Le curseur parcourt toutes les notes jouées (les vôtres et celles de la 2ᵉ flûte affichée),
       // même pendant vos silences ; la note « À jouer » et les couleurs restent sur votre partie.
@@ -1063,6 +1097,21 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
               {total} notes · {wrong} fausse{wrong > 1 ? "s" : ""} note{wrong > 1 ? "s" : ""} · meilleure série {bestStreak}
             </p>
             {finalRhythm && <p className="rhythm-summary">⏱ {rhythmSummary(finalRhythm)}</p>}
+            {finalIntonation && (() => {
+              const s = intonationSummary(finalIntonation);
+              return (
+                <div className="intonation-summary">
+                  <p>🎯 {s.headline}</p>
+                  {s.details.length > 0 && (
+                    <ul>
+                      {s.details.map((d) => (
+                        <li key={d}>{d}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
             <div className="controls">
               <button className="primary" onClick={startMic}>
                 🎤 Rejouer
