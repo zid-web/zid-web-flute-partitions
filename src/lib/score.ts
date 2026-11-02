@@ -77,6 +77,12 @@ export class ScoreController {
     this.goToStep(0);
   }
 
+  /** Modifie l'échelle d'affichage de la partition (zoom pupitre). */
+  setZoom(zoom: number): void {
+    this.osmd.Zoom = zoom;
+    this.osmd.render();
+  }
+
   private indexSteps(): void {
     const cursor = this.osmd.cursor;
     cursor.reset();

@@ -9,6 +9,7 @@ import { HomeHero } from "./HomeHero";
 import { FluteExplorer } from "./FluteExplorer";
 import { HowItWorks } from "./HowItWorks";
 import { FeaturedScore } from "./FeaturedScore";
+import { isDesktopApp, getPlatformLabel } from "../lib/platform";
 
 interface Props {
   catalog: CatalogEntry[];
@@ -232,17 +233,25 @@ export function Library({
 
   return (
     <main className="library-modern">
-      {/* Barre de navigation supérieure moderne */}
-      <header className="navbar-modern">
+      {/* Barre de navigation supérieure moderne compatible bureau / macOS */}
+      <header className="navbar-modern" data-tauri-drag-region>
         <div className="navbar-brand">
           <span className="brand-icon">🎶</span>
           <div className="brand-text">
             <span className="brand-title">Flûte Partitions</span>
-            <span className="brand-subtitle">Studio d'apprentissage interactif</span>
+            <span className="brand-subtitle">
+              {isDesktopApp() ? `Studio de Flûte · ${getPlatformLabel()}` : "Studio d'apprentissage interactif"}
+            </span>
           </div>
         </div>
 
         <div className="navbar-actions">
+          {isDesktopApp() && (
+            <span className="desktop-indicator-pill" title="Application installée et exécutée en local sur votre ordinateur">
+              🖥️ Mode Bureau Local
+            </span>
+          )}
+
           <div className="star-total-badge" title="Total des étoiles obtenues sur vos morceaux">
             ⭐ <span>{totalStars}</span>
           </div>

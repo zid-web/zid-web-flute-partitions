@@ -164,6 +164,95 @@ button.danger:hover {
 }
 
 /* =========================================================
+   SUPPORT FENÊTRE NATIVE TAURI & LOCAL (macOS / Windows / Linux)
+   ========================================================= */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] select,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+/* Intégration macOS Overlay Titlebar : feux tricolores rouge/jaune/vert */
+.is-macos.is-desktop-app .navbar-modern {
+  padding-left: 88px;
+  padding-top: max(14px, env(safe-area-inset-top));
+}
+
+.is-macos.is-desktop-app .player-bar {
+  padding-left: 88px;
+  padding-top: max(12px, env(safe-area-inset-top));
+}
+
+.desktop-indicator-pill {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--good);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.hero-pill.local-highlight {
+  background: rgba(16, 185, 129, 0.25);
+  color: #ffffff;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+/* Outils de bureau pour le lecteur : Zoom & Pupitre */
+.player-desktop-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 0.15rem 0.35rem;
+}
+
+.zoom-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 0 0.4rem;
+  min-width: 44px;
+  text-align: center;
+}
+
+.tool-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+  border: none;
+}
+
+.pupitre-btn {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.pupitre-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+/* =========================================================
    BARRE DE NAVIGATION MODERNE
    ========================================================= */
 .navbar-modern {
