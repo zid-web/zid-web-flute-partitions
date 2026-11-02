@@ -55,6 +55,13 @@ export async function saveUserScore(entry: CatalogEntry, xml: string, accompanim
   return { ...entry, addedAt };
 }
 
+/** Remplace la partition (correction de notes dans l'application) ; date d'import et piano gardés. */
+export async function updateUserScoreXml(id: string, xml: string): Promise<void> {
+  const stored = await run<StoredScore | undefined>("readonly", (s) => s.get(id));
+  if (!stored) throw new Error("Partition importée introuvable sur cet appareil.");
+  await run("readwrite", (s) => s.put({ ...stored, xml } satisfies StoredScore));
+}
+
 export async function deleteUserScore(id: string): Promise<void> {
   await run("readwrite", (s) => s.delete(id));
 }

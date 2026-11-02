@@ -95,13 +95,15 @@ Android : après `tauri android init`, ajouter la permission micro dans
 
 Pousser un tag : `git tag v0.2.0 && git push origin v0.2.0`, ou lancer le workflow **Release** à la main
 (Actions › Release › Run workflow : version, et « mac » pour ne construire que l'application Mac). Il crée
-un brouillon de Release GitHub avec les installeurs Windows, macOS (universel), Linux et l'APK Android.
+une Release GitHub publiée avec les installeurs Windows, macOS (universel), Linux et l'APK Android.
+Les applications de bureau y trouvent leur mise à jour (`latest.json`) et la proposent dans la bibliothèque.
 Le numéro de version (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) doit
 correspondre au tag.
 
 | Plateforme | Ce qu'il faut | Secrets / variables GitHub |
 |---|---|---|
 | Windows, Linux | rien | — |
+| Mises à jour automatiques (bureau) | la clé privée de signature des mises à jour (sa clé publique est dans `tauri.conf.json`) | `TAURI_SIGNING_PRIVATE_KEY` (et `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` si elle en a un) — sans elle : pas de mise à jour proposée |
 | macOS signé + notarisé | compte Apple Developer (99 $/an) | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` |
 | Android signé (Play Store) | un keystore | `ANDROID_KEYSTORE` (base64), `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` — sans eux : APK de test (debug) |
 | iOS (App Store / TestFlight) | compte Apple Developer | variable `APPLE_DEVELOPMENT_TEAM` + secrets `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_P8` |

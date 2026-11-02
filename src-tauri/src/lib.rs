@@ -274,7 +274,13 @@ fn save_backup(app: tauri::AppHandle, name: String, content: String) -> Result<S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Mises à jour de l'application de bureau : proposées dans la bibliothèque (src/lib/nativeUpdate.ts).
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+    builder
         .invoke_handler(tauri::generate_handler![
             save_backup,
             audiveris_path,

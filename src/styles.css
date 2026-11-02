@@ -1890,3 +1890,21 @@ button.link {
 .intonation-summary { text-align: left; max-width: 34rem; margin: 0 auto; }
 .intonation-summary p { font-weight: 600; margin: 0.25rem 0; }
 .intonation-summary ul { margin: 0.25rem 0 0; padding-left: 1.2rem; display: grid; gap: 0.2rem; font-size: 0.92rem; color: var(--ink-secondary); }
+
+/* Mise à jour de l'application de bureau, proposée dans la bibliothèque */
+.update-banner { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 210;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; max-width: calc(100vw - 32px);
+  background: var(--card); color: var(--ink); border: 1px solid var(--border-focus); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 0.7rem 1rem; }
+.update-banner button { padding: 0.35rem 0.9rem; }
+.update-progress { flex: 1 0 100%; height: 6px; border-radius: 999px; background: rgba(99, 102, 241, 0.15); overflow: hidden; }
+.update-progress span { display: block; height: 100%; background: var(--primary); transition: width 0.2s; }
+
+/* Correction de notes (partitions importées) */
+.note-editor { margin-top: 1rem; background: var(--card); border: 2px solid var(--border-focus); border-radius: var(--radius);
+  padding: 0.8rem 1rem; box-shadow: var(--shadow-md); position: sticky; top: 0.5rem; z-index: 20; }
+.note-editor .edit-hint { margin: 0 0 0.6rem; font-size: 1.05rem; }
+.note-editor .edit-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.note-editor .edit-message { margin: 0.6rem 0 0; font-weight: 600; }
+.note-editor .edit-tip { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.85rem; }
+.sheet .editing { cursor: pointer; }

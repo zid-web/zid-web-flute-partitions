@@ -16,6 +16,8 @@ export interface ScoreStep {
   seconds: number;
   /** Indice de la mesure (0 = première), pour travailler un passage en boucle. */
   measure: number;
+  /** Position dans la mesure, en noires (correction de notes). */
+  beatInMeasure: number;
 }
 
 /** Signature d'une mesure (4/4, 6/8…). */
@@ -137,6 +139,7 @@ export class ScoreController {
           startSec: sec,
           seconds: beats * secPerBeat,
           measure: m,
+          beatInMeasure: inMeasure,
         });
         this.gnotesByCursor.set(i, cursor.GNotesUnderCursor().filter((g) => isMine(g.sourceNote)));
       }
@@ -192,6 +195,30 @@ export class ScoreController {
         // Note sans élément SVG (ex. note cachée) : rien à colorer.
       }
     }
+  }
+
+  /**
+   * Note du lecteur la plus proche d'un point de l'écran (clic ou toucher), ou null si aucune
+   * n'est assez près (correction de notes).
+   */
+  stepAt(clientX: number, clientY: number, maxDistance = 36): number | null {
+    let best: number | null = null;
+    let bestDist = maxDistance;
+    this.steps.forEach((s, i) => {
+      for (const g of this.gnotesByCursor.get(s.cursorIndex) ?? []) {
+        const el = (g as unknown as { getSVGGElement?: () => SVGGElement | undefined }).getSVGGElement?.();
+        const r = el?.getBoundingClientRect();
+        if (!r || (r.width === 0 && r.height === 0)) continue;
+        const dx = Math.max(r.left - clientX, 0, clientX - r.right);
+        const dy = Math.max(r.top - clientY, 0, clientY - r.bottom);
+        const d = Math.hypot(dx, dy);
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
+      }
+    });
+    return best;
   }
 
   resetColors(): void {

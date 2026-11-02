@@ -23,9 +23,12 @@ import {
 import { LEVEL_LABELS, loadAccompanimentXml, loadScoreXml, type CatalogEntry } from "../lib/catalog";
 import { DEFAULT_FOLLOWER_OPTIONS, ScoreFollower, starsFor, type FollowerEvent } from "../lib/follower";
 import { centsOff, midiToName } from "../lib/notes";
+import { FLUTE_HIGH, FLUTE_LOW } from "../lib/fluteRange";
 import { MicPitchSource } from "../lib/pitch";
 import { recordResult, type PieceProgress } from "../lib/progress";
 import { COLORS, ScoreController } from "../lib/score";
+import { applyNoteEdit, canEditNote, type NoteEdit } from "../lib/noteEdit";
+import { updateUserScoreXml } from "../lib/userScores";
 import { isMyFluteEnabled, isMyFluteOnly, listTakes } from "../lib/myFlute";
 import { PianoSampler } from "../lib/piano";
 import { SampledFlute, type FlutePlayer } from "../lib/sampler";
@@ -85,6 +88,9 @@ type Mode = "idle" | "mic" | "listen" | "finished";
 const LOOKAHEAD = 0.15;
 /** Retard du micro et de l'analyse sur le son réel de la flûte (secondes). */
 const MIC_DELAY = 0.03;
+
+/** Note sélectionnée pour la corriger. */
+const EDIT_COLOR = "#6366f1";
 
 const PRAISE = ["Bravo !", "Super !", "Magnifique !", "Quelle oreille !", "Continuez !", "Parfait !"];
 
@@ -167,6 +173,19 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const warpedRef = useRef<{ piano: PianoNote[]; flute2: PianoNote[] }>({ piano: [], flute2: [] });
   const passRef = useRef({ n: 0, wrong: 0 });
 
+  // Correction de notes (partitions importées) : partition chargée, accompagnement affiché, annulations.
+  const xmlRef = useRef<string | null>(null);
+  const displayAccompRef = useRef<string | null>(null);
+  const undoRef = useRef<string[]>([]);
+  const [editing, setEditing] = useState(false);
+  const [editStep, setEditStep] = useState<number | null>(null);
+  const [editMessage, setEditMessage] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  /** Changée en quittant la correction : la partition est rechargée (sons, suivi, tempo). */
+  const [revision, setRevision] = useState(0);
+  const canEdit = entry.origin === "import" && !pianoOnly;
+
   // Zoom et mode pupitre pour utilisation en local sur ordinateur
   const [zoom, setZoom] = useState(1.0);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -239,6 +258,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     setLoading(true);
     loadScoreXml(entry)
       .then(async (xml) => {
+        xmlRef.current = xml;
         // Parties jouées par l'application : toute la partition (piano seul), ou l'accompagnement gardé
         // à l'import ou publié avec le morceau (piano et/ou 2ᵉ flûte).
         melodyRef.current = entry.kind === "piano" ? [] : melodyNotes(xml);
@@ -264,7 +284,8 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         }
         // Partition affichée : votre partie, plus la 2ᵉ flûte s'il y en a une (notes et curseur visibles
         // pendant qu'elle joue). Le micro et les couleurs ne suivent que votre partie, la première.
-        const display = entry.kind === "piano" ? xml : withPartnerFlutes(xml, await loadAccompanimentXml(entry).catch(() => null));
+        displayAccompRef.current = entry.kind === "piano" ? null : await loadAccompanimentXml(entry).catch(() => null);
+        const display = entry.kind === "piano" ? xml : withPartnerFlutes(xml, displayAccompRef.current);
         return controller.load(display);
       })
       .then(() => {
@@ -294,13 +315,17 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         handoff = audioRef.current;
       } else {
         void audioRef.current?.ctx.close().catch(() => {});
+        // rechargement après une correction : de nouveaux sons seront préparés
+        audioRef.current = null;
+        synthRef.current = null;
+        pianoRef.current = null;
       }
       timersRef.current.forEach(clearTimeout);
       cancelAnimationFrame(rafRef.current);
       if (accompanistRef.current) clearInterval(accompanistRef.current.timer);
       controller.dispose();
     };
-  }, [entry]);
+  }, [entry, revision]);
 
   useEffect(() => {
     followerRef.current?.setOptions({ ...DEFAULT_FOLLOWER_OPTIONS, octaveTolerant });
@@ -836,6 +861,158 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
     if (follower.done) finish(wrongRef.current);
   }, [finish]);
 
+  // --- Correction de notes (partitions importées) -------------------------------------------
+  const selectEdit = useCallback((i: number | null) => {
+    const ctrl = scoreRef.current;
+    if (!ctrl) return;
+    ctrl.resetColors();
+    if (i === null || !ctrl.steps[i]) {
+      setEditStep(null);
+      return;
+    }
+    ctrl.goToCursor(ctrl.steps[i].cursorIndex);
+    ctrl.color(i, EDIT_COLOR);
+    setEditStep(i);
+  }, []);
+
+  /** Fait entendre la note (avec le son de flûte de l'écoute). */
+  const previewNote = useCallback(
+    (midi: number) => {
+      void ensureAudio()
+        .then(() => synthRef.current?.play(midi, 0.6))
+        .catch(() => {});
+    },
+    [ensureAudio],
+  );
+
+  /** Redessine la partition corrigée sans bouger la page, et garde la note choisie. */
+  const rerenderEdited = useCallback(
+    async (xml: string, select: number | null) => {
+      const ctrl = scoreRef.current;
+      if (!ctrl) return;
+      xmlRef.current = xml;
+      const y = window.scrollY;
+      await ctrl.load(withPartnerFlutes(xml, displayAccompRef.current));
+      setTotal(ctrl.steps.length);
+      selectEdit(select === null || ctrl.steps.length === 0 ? null : Math.min(select, ctrl.steps.length - 1));
+      window.scrollTo(0, y);
+      requestAnimationFrame(() => window.scrollTo(0, y));
+    },
+    [selectEdit],
+  );
+
+  const startEditing = useCallback(() => {
+    restart();
+    const ctrl = scoreRef.current;
+    const xml = xmlRef.current;
+    if (!ctrl || !xml) return;
+    undoRef.current = [];
+    setCanUndo(false);
+    setEditMessage(null);
+    setEditing(true);
+    selectEdit(null);
+  }, [restart, selectEdit]);
+
+  const finishEditing = useCallback(() => {
+    setEditing(false);
+    setEditStep(null);
+    setEditMessage(null);
+    if (undoRef.current.length > 0) setRevision((r) => r + 1); // sons, suivi et tempo d'après la partition corrigée
+    else restart();
+    undoRef.current = [];
+    setCanUndo(false);
+  }, [restart]);
+
+  const applyEdit = useCallback(
+    async (edit: NoteEdit) => {
+      const before = xmlRef.current;
+      const ref = editStep !== null ? scoreRef.current?.steps[editStep] : undefined;
+      if (editStep === null || !ref || !before || editBusy) return;
+      if (!canEditNote(before, ref)) {
+        setEditMessage("⚠️ Cette note n'a pas été retrouvée dans le fichier : corrigez-la dans MuseScore.");
+        return;
+      }
+      const result = applyNoteEdit(before, ref, edit);
+      if (!result || (result.midi !== null && (result.midi < FLUTE_LOW || result.midi > FLUTE_HIGH))) {
+        setEditMessage(`Impossible : la note sortirait de la tessiture de la flûte (${midiToName(FLUTE_LOW)}–${midiToName(FLUTE_HIGH)}).`);
+        return;
+      }
+      setEditBusy(true);
+      try {
+        await rerenderEdited(result.xml, editStep);
+        await updateUserScoreXml(entry.id, result.xml);
+        undoRef.current.push(before);
+        setCanUndo(true);
+        setEditMessage(result.midi === null ? "🔇 Remplacée par un silence. Enregistré ✓" : `${midiToName(result.midi)} · enregistré ✓`);
+        if (result.midi !== null) previewNote(result.midi);
+      } catch (e) {
+        await rerenderEdited(before, editStep).catch(() => {});
+        setEditMessage(`⚠️ Correction impossible : ${(e as Error).message}`);
+      } finally {
+        setEditBusy(false);
+      }
+    },
+    [editStep, editBusy, rerenderEdited, entry.id, previewNote],
+  );
+
+  const undoEdit = useCallback(async () => {
+    const previous = undoRef.current.pop();
+    setCanUndo(undoRef.current.length > 0);
+    if (!previous || editBusy) return;
+    setEditBusy(true);
+    try {
+      await rerenderEdited(previous, editStep);
+      await updateUserScoreXml(entry.id, previous);
+      setEditMessage("↶ Correction annulée. Enregistré ✓");
+    } catch (e) {
+      setEditMessage(`⚠️ ${(e as Error).message}`);
+    } finally {
+      setEditBusy(false);
+    }
+  }, [editBusy, editStep, rerenderEdited, entry.id]);
+
+  const pickEditNote = useCallback(
+    (clientX: number, clientY: number) => {
+      const i = scoreRef.current?.stepAt(clientX, clientY) ?? null;
+      if (i === null) return;
+      selectEdit(i);
+      setEditMessage(null);
+      const midi = scoreRef.current?.steps[i]?.midi;
+      if (midi !== undefined) previewNote(midi);
+    },
+    [selectEdit, previewNote],
+  );
+
+  // Clavier pendant la correction : ← → choisir, ↑ ↓ demi-ton (Maj : octave), Suppr silence.
+  useEffect(() => {
+    if (!editing) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const n = scoreRef.current?.steps.length ?? 0;
+      if (e.key === "Escape") finishEditing();
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") void undoEdit();
+      else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        const next = editStep === null ? 0 : editStep + (e.key === "ArrowRight" ? 1 : -1);
+        if (next >= 0 && next < n) {
+          selectEdit(next);
+          const midi = scoreRef.current?.steps[next]?.midi;
+          if (midi !== undefined) previewNote(midi);
+        }
+      } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        const by = e.key === "ArrowUp" ? 1 : -1;
+        void applyEdit(e.shiftKey ? { kind: "octave", by } : { kind: "semitone", by });
+      } else if (e.key === "Delete" || e.key === "Backspace") void applyEdit({ kind: "rest" });
+      else return;
+      e.preventDefault();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing, editStep, applyEdit, undoEdit, finishEditing, selectEdit, previewNote]);
+
+  const editedStep = editStep !== null ? scoreRef.current?.steps[editStep] : undefined;
+  // pendant la correction, la note choisie et son doigté
+  const shownMidi = editing ? (editedStep?.midi ?? null) : expectedMidi;
+
   const cents = heard !== null && expectedMidi !== null ? centsOff(heard, expectedMidi) : null;
   const inTune = cents !== null && Math.abs(cents) <= DEFAULT_FOLLOWER_OPTIONS.toleranceCents;
 
@@ -875,8 +1052,8 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
 
       <section className="hud">
         <div className="note-box expected">
-          <small>À jouer</small>
-          <b>{expectedMidi !== null && mode !== "finished" ? midiToName(expectedMidi) : "—"}</b>
+          <small>{editing ? "Note choisie" : "À jouer"}</small>
+          <b>{shownMidi !== null && mode !== "finished" ? midiToName(shownMidi) : "—"}</b>
         </div>
         <div className={`note-box heard ${heard === null ? "" : inTune ? "good" : "off"}`}>
           <small>J'entends</small>
@@ -885,7 +1062,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
             <span style={{ left: `${50 + Math.max(-50, Math.min(50, (cents ?? 0) / 2))}%` }} />
           </div>
         </div>
-        {!pianoOnly && <Fingering midi={mode === "finished" ? null : expectedMidi} />}
+        {!pianoOnly && <Fingering midi={mode === "finished" ? null : shownMidi} />}
         <div className="stats">
           <span>
             🎵 {Math.min(step, total)}/{total}
@@ -900,6 +1077,57 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         <span style={{ width: total ? `${(Math.min(step, total) / total) * 100}%` : 0 }} />
       </div>
 
+      {editing ? (
+        <section className="note-editor" aria-label="Correction des notes">
+          <p className="edit-hint">
+            {editedStep && editStep !== null ? (
+              <>
+                Note {editStep + 1}/{total} · mesure {editedStep.measure + 1} : <b>{midiToName(editedStep.midi)}</b>
+              </>
+            ) : (
+              "✏️ Touchez la note fausse sur la partition."
+            )}
+          </p>
+          <div className="edit-buttons">
+            <button onClick={() => editStep !== null && editStep > 0 && selectEdit(editStep - 1)} disabled={editStep === null || editStep === 0} title="Note précédente (←)">
+              ◀
+            </button>
+            <button
+              onClick={() => selectEdit(editStep === null ? 0 : Math.min(total - 1, editStep + 1))}
+              disabled={editStep !== null && editStep >= total - 1}
+              title="Note suivante (→)"
+            >
+              ▶
+            </button>
+            <button onClick={() => void applyEdit({ kind: "semitone", by: -1 })} disabled={editStep === null || editBusy} title="Un demi-ton plus bas (↓)">
+              ♭ ½ ton plus bas
+            </button>
+            <button onClick={() => void applyEdit({ kind: "semitone", by: 1 })} disabled={editStep === null || editBusy} title="Un demi-ton plus haut (↑)">
+              ♯ ½ ton plus haut
+            </button>
+            <button onClick={() => void applyEdit({ kind: "octave", by: -1 })} disabled={editStep === null || editBusy} title="Une octave plus bas (Maj + ↓)">
+              ⬇ Octave
+            </button>
+            <button onClick={() => void applyEdit({ kind: "octave", by: 1 })} disabled={editStep === null || editBusy} title="Une octave plus haut (Maj + ↑)">
+              ⬆ Octave
+            </button>
+            <button onClick={() => void applyEdit({ kind: "rest" })} disabled={editStep === null || editBusy} title="Remplacer par un silence (Suppr)">
+              🔇 Silence
+            </button>
+            <button onClick={() => void undoEdit()} disabled={!canUndo || editBusy} title="Annuler la dernière correction (Ctrl/⌘ + Z)">
+              ↶ Annuler
+            </button>
+            <button className="primary" onClick={finishEditing} disabled={editBusy}>
+              ✓ Terminer
+            </button>
+          </div>
+          {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
+          <p className="edit-tip">
+            Chaque correction est enregistrée sur cet appareil. Clavier : ← → choisir · ↑ ↓ demi-ton · Maj + ↑ ↓ octave ·
+            Suppr silence · Échap terminer.
+          </p>
+        </section>
+      ) : (
       <section className="controls">
         {pianoOnly ? null : mode === "mic" ? (
           <button className="primary" onClick={restart}>
@@ -921,6 +1149,11 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         <button onClick={restart} disabled={loading}>
           ↺ Recommencer
         </button>
+        {canEdit && (
+          <button onClick={startEditing} disabled={loading} title="Corriger une note mal reconnue (import PDF)">
+            ✏️ Corriger des notes
+          </button>
+        )}
         <label className="slider">
           Tempo ♩ = {tempo}
           <input type="range" min={30} max={240} value={tempo} onChange={(e) => setTempo(Number(e.target.value))} />
@@ -973,7 +1206,9 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           </label>
         )}
       </section>
-      {!pianoOnly && (
+      )}
+      {!editing && editMessage && <p className="message error">{editMessage}</p>}
+      {!pianoOnly && !editing && (
         <section className="practice" aria-label="Outils de travail">
           <label className="toggle" title="Une mesure de clics au tempo choisi avant de jouer">
             <input
@@ -1076,7 +1311,11 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       <section className="sheet">
         {loading && !loadError && <p className="message">Préparation de la partition…</p>}
         {loadError && <p className="message error">⚠️ {loadError}</p>}
-        <div ref={containerRef} />
+        <div
+          ref={containerRef}
+          className={editing ? "editing" : undefined}
+          onClick={editing ? (e) => pickEditNote(e.clientX, e.clientY) : undefined}
+        />
       </section>
 
       {praise && <div className="praise">{praise}</div>}
