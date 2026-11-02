@@ -2,7 +2,7 @@
 #   git tag v0.2.0 && git push origin v0.2.0
 # ou à la main (Actions › Release › Run workflow) : version + plateformes ; le tag est créé
 # par la Release, sur le commit lancé.
-# Secrets facultatifs (signature) : voir README, section « Publier les applications ».
+# Secrets facultatifs (signature, mises à jour automatiques) : voir README, section « Publier les applications ».
 name: Release
 on:
   push:
@@ -68,15 +68,32 @@ jobs:
             echo "Pas de certificat Apple : signature ad hoc"
             echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
           fi
+      # Mises à jour automatiques : la clé privée (secret TAURI_SIGNING_PRIVATE_KEY) signe le paquet
+      # de mise à jour et `latest.json`, que l'application de bureau vérifie avec la clé publique de
+      # tauri.conf.json. Sans le secret, la construction se fait quand même, sans fichiers de mise à jour.
+      - name: Mises à jour automatiques
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Paquet de mise à jour signé"
+          else
+            echo "Pas de clé TAURI_SIGNING_PRIVATE_KEY : construction sans paquet de mise à jour"
+            node -e "const f='src-tauri/tauri.conf.json',fs=require('fs'),c=JSON.parse(fs.readFileSync(f));c.bundle.createUpdaterArtifacts=false;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+          fi
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ inputs.version || github.ref_name }}
           releaseName: "Flûte Partitions ${{ inputs.version || github.ref_name }}"
           releaseCommitish: ${{ github.sha }}
           releaseBody: "Téléchargez le fichier correspondant à votre système ci-dessous."
-          releaseDraft: true
+          # Publiée tout de suite : l'application de bureau la trouve (releases/latest/download/latest.json).
+          releaseDraft: false
           args: ${{ matrix.args }}
 
   android:
@@ -132,7 +149,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
-          draft: true
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
@@ -165,5 +181,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
-          draft: true
           files: src-tauri/gen/apple/build/**/*.ipa

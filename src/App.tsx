@@ -7,6 +7,7 @@ import { loadCatalog, type CatalogEntry } from "./lib/catalog";
 import { startContentSync } from "./lib/contentSync";
 import { listTakes } from "./lib/myFlute";
 import { movementsOf } from "./lib/movements";
+import { watchNativeUpdates, type NativeUpdate } from "./lib/nativeUpdate";
 import { loadProgress, type PieceProgress } from "./lib/progress";
 import { saveFile } from "./lib/saveFile";
 import {
@@ -28,6 +29,9 @@ export function App() {
   const [progress, setProgress] = useState<Record<string, PieceProgress>>(loadProgress);
   const [news, setNews] = useState<string | null>(null);
   const [updateWaiting, setUpdateWaiting] = useState(false);
+  // Application de bureau : nouvelle version publiée, proposée dans la bibliothèque.
+  const [nativeUpdate, setNativeUpdate] = useState<NativeUpdate | null>(null);
+  const [installing, setInstalling] = useState<number | null | "error" | undefined>(undefined);
 
   useEffect(() => {
     let stopSync = () => {};
@@ -55,9 +59,11 @@ export function App() {
       if (list.length > 0 || takes.length > 0) void requestPersistentStorage();
     });
     const stopWaiting = onUpdateWaiting(setUpdateWaiting);
+    const stopNative = watchNativeUpdates(setNativeUpdate);
     return () => {
       stopSync();
       stopWaiting();
+      stopNative();
     };
   }, []);
 
@@ -69,6 +75,16 @@ export function App() {
     const t = window.setTimeout(() => setNews(null), 6000);
     return () => clearTimeout(t);
   }, [news]);
+
+  const installNativeUpdate = useCallback(async () => {
+    if (!nativeUpdate) return;
+    setInstalling(null);
+    try {
+      await nativeUpdate.install((f) => setInstalling(f));
+    } catch {
+      setInstalling("error");
+    }
+  }, [nativeUpdate]);
 
   const all = useMemo(() => [...userScores, ...(catalog ?? [])], [catalog, userScores]);
   const movements = useMemo(() => (current ? movementsOf(current, all) : []), [current, all]);
@@ -111,6 +127,39 @@ export function App() {
       {updateWaiting && current && (
         <div className="toast" role="status">
           ✨ Nouvelle version prête : elle s'installera à la fin du morceau.
+        </div>
+      )}
+      {/* Jamais pendant un morceau : uniquement depuis la bibliothèque. */}
+      {nativeUpdate && !current && !myFlute && (
+        <div className="update-banner" role="status">
+          {installing === undefined ? (
+            <>
+              <span>
+                ✨ Nouvelle version <b>{nativeUpdate.version}</b> disponible
+              </span>
+              <button className="primary" onClick={() => void installNativeUpdate()}>
+                Installer et redémarrer
+              </button>
+              <button className="ghost" onClick={() => setNativeUpdate(null)} title="Plus tard">
+                Plus tard
+              </button>
+            </>
+          ) : installing === "error" ? (
+            <>
+              <span>⚠️ La mise à jour n'a pas pu être installée. Vérifiez la connexion et réessayez.</span>
+              <button onClick={() => void installNativeUpdate()}>Réessayer</button>
+            </>
+          ) : (
+            <>
+              <span>
+                ⬇️ Téléchargement de la version {nativeUpdate.version}
+                {installing !== null && ` : ${Math.round(installing * 100)} %`}… l'application va redémarrer.
+              </span>
+              <span className="update-progress" aria-hidden>
+                <span style={{ width: `${Math.round((installing ?? 0.05) * 100)}%` }} />
+              </span>
+            </>
+          )}
         </div>
       )}
     </>

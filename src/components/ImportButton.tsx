@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { LEVEL_LABELS, type CatalogEntry } from "../lib/catalog";
 import { ACCEPTED_EXTENSIONS, prepareImport, readScoreBytes, readScoreFile } from "../lib/import";
-import { audiverisPath, convertPdf, isPdf } from "../lib/pdfImport";
+import { assembleOmrPages } from "../lib/omrPages";
+import { audiverisPath, cancelPdf, convertPdf, isPdf } from "../lib/pdfImport";
 import { saveUserScore } from "../lib/userScores";
 
 type Status =
@@ -20,6 +21,8 @@ interface Progress {
   /** Heure de début (ms) du fichier en cours, pour estimer le temps restant d'un PDF. */
   startedAt: number;
   pdf: boolean;
+  /** Partition d'orchestre : nombre de parties d'une page (reconnaissance longue). */
+  orchestra?: number;
 }
 
 /** Temps restant estimé (« environ 2 min »), d'après le temps déjà passé et l'avancement. */
@@ -45,6 +48,9 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
   // Application pour ordinateur avec Audiveris : les PDF sont reconnus sur place.
   const [audiveris, setAudiveris] = useState<string | null>(null);
   useEffect(() => void audiverisPath().then(setAudiveris), []);
+  // « Annuler » : la conversion en cours s'arrête, les fichiers suivants ne sont pas importés.
+  const cancelledRef = useRef(false);
+  const [cancelling, setCancelling] = useState(false);
   // horloge pour le temps restant (rafraîchie chaque seconde pendant un import)
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -53,10 +59,10 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
     return () => clearInterval(t);
   }, [status.kind]);
 
-  async function importXml(xml: string, name: string, results: Result[]) {
+  async function importXml(xml: string, name: string, results: Result[], extraWarnings: string[] = []) {
     const { entry, xml: kept, accompaniment, warnings } = prepareImport(xml, name);
     const saved = await saveUserScore(entry, kept, accompaniment);
-    results.push({ file: name, entry: saved, warnings });
+    results.push({ file: name, entry: saved, warnings: [...warnings, ...extraWarnings] });
     onImported(saved);
   }
 
@@ -64,22 +70,38 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
   async function importFiles(files: File[]) {
     if (!files.length) return;
     const results: Result[] = [];
+    cancelledRef.current = false;
+    setCancelling(false);
     for (const [i, file] of files.entries()) {
+      if (cancelledRef.current) break;
       const pdf = isPdf(file);
       const base: Progress = { file: file.name, index: i + 1, count: files.length, percent: 0, label: "", startedAt: Date.now(), pdf };
+      let orchestra: number | undefined;
       const show = (percent: number, label: string) =>
-        setStatus({ kind: "busy", ...base, percent: Math.round(Math.min(100, Math.max(0, percent))), label });
+        setStatus({ kind: "busy", ...base, orchestra, percent: Math.round(Math.min(100, Math.max(0, percent))), label });
       try {
         if (pdf) {
-          // Reconnaissance par Audiveris (application pour ordinateur), puis import de chaque morceau.
+          // Reconnaissance par Audiveris (application pour ordinateur), page par page, puis les pages
+          // sont rassemblées en morceaux.
           show(1, "Préparation du PDF…");
-          const parts = await convertPdf(file, (p) => show(3 + 85 * p.fraction, p.label));
+          const conversion = await convertPdf(file, (p) => {
+            orchestra = p.orchestra;
+            show(3 + 85 * p.fraction, p.label);
+          });
           show(90, "Écriture de la partition (MusicXML)…");
-          for (const [k, part] of parts.entries()) {
-            show(92 + (6 * k) / parts.length, parts.length > 1 ? `Rangement dans la bibliothèque (morceau ${k + 1} sur ${parts.length})…` : "Rangement dans la bibliothèque…");
-            const stem = file.name.replace(/\.pdf$/i, "");
-            // « Ballade.mvt2.mxl » → « Ballade.mvt2.mxl » ; garde le nom d'origine du PDF
-            await importXml(await readScoreBytes(part.bytes), `${stem}${part.name.slice(part.name.indexOf("."))}`, results);
+          const pages = await Promise.all(conversion.pages.map(async (f) => ({ name: f.name, xml: await readScoreBytes(f.bytes) })));
+          const pieces = assembleOmrPages(pages);
+          const skipped =
+            conversion.failed.length === 0
+              ? []
+              : [
+                  `page${conversion.failed.length > 1 ? "s" : ""} ${conversion.failed.join(", ")} sur ${conversion.pageCount} non reconnue${conversion.failed.length > 1 ? "s" : ""} (sautée${conversion.failed.length > 1 ? "s" : ""}) : vérifiez la partition, ou corrigez avec ✏️ Corriger des notes`,
+                ];
+          const stem = file.name.replace(/\.pdf$/i, "");
+          for (const [k, piece] of pieces.entries()) {
+            show(92 + (6 * k) / pieces.length, pieces.length > 1 ? `Rangement dans la bibliothèque (morceau ${k + 1} sur ${pieces.length})…` : "Rangement dans la bibliothèque…");
+            // « Ballade.pdf » → « Ballade.mxl », « Ballade.mvt2.mxl »… (mouvements regroupés)
+            await importXml(piece.xml, `${stem}${piece.suffix}.mxl`, results, k === 0 ? skipped : []);
           }
         } else {
           show(15, "Lecture du fichier…");
@@ -145,7 +167,7 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
           <li>Téléchargez-le, puis importez-le ici.</li>
           <li>
             {audiveris
-              ? "Un PDF est lu directement par Audiveris, installé sur cet ordinateur (1 à 2 minutes par page). La reconnaissance n'est jamais parfaite : relisez la partition."
+              ? "Un PDF est lu directement par Audiveris, installé sur cet ordinateur (plusieurs pages à la fois, de 15 à 60 secondes par page). Pour une œuvre d'orchestre, importez la partie de flûte seule : c'est bien plus rapide. La reconnaissance n'est jamais parfaite : relisez la partition."
               : "Un PDF se lit dans l'application pour ordinateur (Mac, Windows) avec Audiveris installé. Sinon, convertissez-le en MusicXML avec MuseScore (Fichier › Importer) ou Audiveris, puis importez le .mxl."}
           </li>
           <li>Si la partition contient plusieurs instruments, seule la partie de flûte est gardée.</li>
@@ -172,6 +194,26 @@ export function ImportButton({ onImported }: { onImported: (entry: CatalogEntry)
             {status.label}
             {remaining(status, now) && <small> — {remaining(status, now)} restantes</small>}
           </div>
+          {status.pdf && status.orchestra && (
+            <p className="import-progress-tip">
+              🎻 Partition d'orchestre ({status.orchestra} parties par page) : la reconnaissance est longue et moins sûre. Pour
+              aller beaucoup plus vite, annulez et importez la <b>partie de flûte seule</b> (sur IMSLP : onglet « Parts »,
+              fichier « Flute »).
+            </p>
+          )}
+          {status.pdf && status.percent < 90 && (
+            <button
+              className="ghost import-cancel"
+              disabled={cancelling}
+              onClick={() => {
+                cancelledRef.current = true;
+                setCancelling(true);
+                void cancelPdf();
+              }}
+            >
+              {cancelling ? "Arrêt…" : "✕ Annuler"}
+            </button>
+          )}
         </div>
       )}
       {status.kind === "done" &&

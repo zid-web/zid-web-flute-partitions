@@ -1,7 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
 /// Audiveris installé sur l'ordinateur (reconnaissance des partitions PDF), ou None.
@@ -42,9 +45,21 @@ fn audiveris_path() -> Option<String> {
 
 #[derive(serde::Serialize)]
 struct OmrFile {
+    /// « p003~Ballade.mvt2.mxl » : page du PDF, puis nom donné par Audiveris (morceau).
     name: String,
     /// MusicXML compressé (.mxl), en base64.
     data: String,
+}
+
+#[derive(serde::Serialize)]
+struct OmrResult {
+    files: Vec<OmrFile>,
+    /// Nombre de pages du PDF.
+    pages: usize,
+    /// Pages non reconnues (sautées), ou abandonnées faute de temps.
+    failed: Vec<usize>,
+    /// Vrai si l'utilisateur a annulé.
+    cancelled: bool,
 }
 
 /// Lignes du journal d'Audiveris utiles pour suivre l'avancement (pages, étapes, export).
@@ -52,10 +67,44 @@ fn is_progress_line(line: &str) -> bool {
     line.contains("StepMonitoring")
         || line.contains("sheets in")
         || line.contains("Book reaching")
+        || line.contains("parts along")
         || line.contains("Exporting")
 }
 
-fn run_audiveris(exe: &Path, pdf: &Path, out: &Path, sheet: Option<usize>, on_line: &dyn Fn(&str)) {
+/// Demande d'annulation de la conversion en cours (bouton « Annuler » de l'import).
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn cancel_pdf() {
+    CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// Au-delà, une page est abandonnée (Audiveris bloqué sur un scan illisible) : les autres sont gardées.
+const PAGE_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+
+/// Arrête Audiveris et ce qu'il a lancé (Java, xvfb-run sous Linux).
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // groupe de processus créé au lancement : tout le groupe s'arrête
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(format!("-{}", child.id()))
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Lance Audiveris sur une page (ou sur tout le PDF) ; renvoie false s'il a été arrêté
+/// (délai dépassé ou annulation).
+fn run_audiveris(
+    exe: &Path,
+    pdf: &Path,
+    out: &Path,
+    sheet: Option<usize>,
+    on_line: &(dyn Fn(&str) + Sync),
+) -> bool {
     let _ = std::fs::create_dir_all(out);
     let mut cmd = if cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none() {
         let mut c = Command::new("xvfb-run");
@@ -72,18 +121,39 @@ fn run_audiveris(exe: &Path, pdf: &Path, out: &Path, sheet: Option<usize>, on_li
         .arg(pdf)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let Ok(mut child) = cmd.spawn() else {
-        return;
-    };
-    // Journal d'Audiveris lu au fil de l'eau : chaque page et chaque étape font avancer la barre.
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if is_progress_line(&line) {
-                on_line(&line);
-            }
-        }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
-    let _ = child.wait();
+    let Ok(mut child) = cmd.spawn() else {
+        return false;
+    };
+    let started = Instant::now();
+    std::thread::scope(|s| {
+        // Journal d'Audiveris lu au fil de l'eau : chaque page et chaque étape font avancer la barre.
+        if let Some(stdout) = child.stdout.take() {
+            s.spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if is_progress_line(&line) {
+                        on_line(&line);
+                    }
+                }
+            });
+        }
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+            if CANCEL.load(Ordering::SeqCst) || started.elapsed() > PAGE_TIMEOUT {
+                kill_tree(&mut child);
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    })
 }
 
 fn collect_mxl(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -102,20 +172,29 @@ fn collect_mxl(dir: &Path, found: &mut Vec<PathBuf>) {
 /// Nombre de pages d'un PDF (approximatif : objets « /Type /Page ») ; 0 si inconnu.
 fn pdf_page_count(bytes: &[u8]) -> usize {
     let text = String::from_utf8_lossy(bytes);
-    text.matches("/Type /Page").count() - text.matches("/Type /Pages").count()
-        + text.matches("/Type/Page").count()
-        - text.matches("/Type/Pages").count()
+    (text.matches("/Type /Page").count() + text.matches("/Type/Page").count())
+        .saturating_sub(text.matches("/Type /Pages").count() + text.matches("/Type/Pages").count())
 }
 
-/// Reconnaît une partition PDF avec Audiveris (sur l'ordinateur, hors ligne) et renvoie les
-/// MusicXML obtenus (un par morceau). Si l'export du fichier entier échoue (page de titre, scan
-/// abîmé…), recommence page par page et garde les pages réussies.
+/// Nombre de pages annoncé par Audiveris (« 9 sheets in … »).
+fn sheets_in(line: &str) -> Option<usize> {
+    let before = &line[..line.find(" sheets in").or_else(|| line.find(" sheet in"))?];
+    before.rsplit(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// Nombre d'Audiveris lancés en même temps : chacun utilise déjà plusieurs cœurs, et une page
+/// d'orchestre demande beaucoup de mémoire.
+fn worker_count(pages: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    (cores / 2).clamp(1, 4).min(pages.max(1))
+}
+
+/// Reconnaît une partition PDF avec Audiveris (sur l'ordinateur, hors ligne), page par page,
+/// plusieurs pages à la fois. Une page illisible ou trop longue est sautée sans faire échouer les
+/// autres ; l'utilisateur peut annuler. Les MusicXML sont rassemblés dans l'application
+/// (`src/lib/omrPages.ts`).
 #[tauri::command]
-async fn convert_pdf(
-    app: tauri::AppHandle,
-    name: String,
-    data: String,
-) -> Result<Vec<OmrFile>, String> {
+async fn convert_pdf(app: tauri::AppHandle, name: String, data: String) -> Result<OmrResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = STANDARD
             .decode(data)
@@ -132,8 +211,9 @@ async fn convert_pdf(
 fn convert_pdf_bytes(
     name: &str,
     bytes: &[u8],
-    on_line: &dyn Fn(&str),
-) -> Result<Vec<OmrFile>, String> {
+    on_line: &(dyn Fn(&str) + Sync),
+) -> Result<OmrResult, String> {
+    CANCEL.store(false, Ordering::SeqCst);
     let exe = find_audiveris().ok_or("Audiveris n'est pas installé sur cet ordinateur.")?;
     let work = std::env::temp_dir().join(format!(
         "flute-omr-{}",
@@ -157,48 +237,102 @@ fn convert_pdf_bytes(
     let pdf = work.join(format!("{stem}.pdf"));
     std::fs::write(&pdf, bytes).map_err(|e| e.to_string())?;
 
-    let mut found = Vec::new();
-    run_audiveris(&exe, &pdf, &work.join("tout"), None, on_line);
-    collect_mxl(&work.join("tout"), &mut found);
-    if found.is_empty() {
-        let pages = pdf_page_count(bytes).clamp(1, 60);
-        for n in 1..=pages {
-            let out = work.join(format!("page{n:02}"));
-            // reprise page par page : l'écran repart de la page n sur le total
-            on_line(&format!("RUN {n}/{pages}"));
-            run_audiveris(&exe, &pdf, &out, Some(n), on_line);
-            let before = found.len();
-            collect_mxl(&out, &mut found);
-            // renommer par page, pour l'ordre des morceaux
-            for f in found.iter_mut().skip(before) {
-                let renamed = out.join(format!(
-                    "{stem}.page{n:02}{}",
-                    f.file_name()
-                        .map(|s| s.to_string_lossy().replacen(&stem, "", 1))
-                        .unwrap_or_default()
-                ));
-                if std::fs::rename(&*f, &renamed).is_ok() {
-                    *f = renamed;
-                }
-            }
+    // Nombre de pages : celui d'Audiveris (fiable), lu dès l'ouverture de la première page ;
+    // les autres pages attendent de le connaître.
+    let total: Mutex<Option<usize>> = Mutex::new(None);
+    let known = Condvar::new();
+    let next = AtomicUsize::new(1);
+    let results: Mutex<Vec<(usize, Vec<PathBuf>)>> = Mutex::new(Vec::new());
+    let failed: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    let guess = pdf_page_count(bytes);
+    let set_total = |n: usize| {
+        let mut t = total.lock().unwrap();
+        if t.is_none() {
+            *t = Some(n.max(1));
+            on_line(&format!("PAGES {}", n.max(1)));
+            known.notify_all();
         }
-    }
-    found.sort();
-    let files = found
+    };
+    let workers = worker_count(if guess > 0 { guess } else { 4 });
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let n = next.fetch_add(1, Ordering::SeqCst);
+                let pages = if n == 1 {
+                    None
+                } else {
+                    let mut t = total.lock().unwrap();
+                    while t.is_none() {
+                        t = known.wait(t).unwrap();
+                    }
+                    *t
+                };
+                if pages.is_some_and(|p| n > p) || CANCEL.load(Ordering::SeqCst) {
+                    break;
+                }
+                let out = work.join(format!("p{n:03}"));
+                on_line(&format!("PAGE_START {n}"));
+                let line = |l: &str| {
+                    if n == 1 {
+                        if let Some(count) = sheets_in(l) {
+                            set_total(count);
+                        }
+                    }
+                    on_line(l);
+                };
+                let finished = run_audiveris(&exe, &pdf, &out, Some(n), &line);
+                // Audiveris n'a rien dit du nombre de pages (PDF très abîmé) : estimation
+                if n == 1 {
+                    set_total(guess);
+                }
+                let mut files = Vec::new();
+                if finished {
+                    collect_mxl(&out, &mut files);
+                }
+                files.sort();
+                if files.is_empty() {
+                    if !CANCEL.load(Ordering::SeqCst) {
+                        failed.lock().unwrap().push(n);
+                    }
+                    on_line(&format!("PAGE_DONE {n} fail"));
+                } else {
+                    on_line(&format!("PAGE_DONE {n} ok"));
+                    results.lock().unwrap().push((n, files));
+                }
+            });
+        }
+    });
+
+    let cancelled = CANCEL.load(Ordering::SeqCst);
+    let pages = total.into_inner().unwrap().unwrap_or(guess);
+    let mut results = results.into_inner().unwrap();
+    results.sort();
+    let files = results
         .iter()
-        .filter_map(|p| {
+        .flat_map(|(n, paths)| paths.iter().map(move |p| (*n, p)))
+        .filter_map(|(n, p)| {
             let data = std::fs::read(p).ok()?;
             Some(OmrFile {
-                name: p.file_name()?.to_string_lossy().into_owned(),
+                name: format!("p{n:03}~{}", p.file_name()?.to_string_lossy()),
                 data: STANDARD.encode(data),
             })
         })
         .collect::<Vec<_>>();
+    let mut failed = failed.into_inner().unwrap();
+    failed.sort();
     let _ = std::fs::remove_dir_all(&work);
+    if cancelled {
+        return Err("Conversion annulée.".into());
+    }
     if files.is_empty() {
         return Err("Audiveris n'a reconnu aucune page de cette partition (scan trop abîmé, ou pas de musique).".into());
     }
-    Ok(files)
+    Ok(OmrResult {
+        files,
+        pages,
+        failed,
+        cancelled,
+    })
 }
 
 #[cfg(test)]
@@ -211,23 +345,37 @@ mod tests {
     fn convertit_un_pdf() {
         let path = std::env::var("OMR_PDF").expect("OMR_PDF");
         let bytes = std::fs::read(&path).unwrap();
-        let lines = std::cell::RefCell::new(Vec::new());
-        let files = convert_pdf_bytes(&path, &bytes, &|l: &str| {
-            lines.borrow_mut().push(l.to_string())
+        let lines = Mutex::new(Vec::<String>::new());
+        let started = Instant::now();
+        let result = convert_pdf_bytes(&path, &bytes, &|l: &str| {
+            lines.lock().unwrap().push(l.to_string())
         })
         .unwrap();
-        let lines = lines.into_inner();
+        println!("{} pages en {:?}, sautées : {:?}", result.pages, started.elapsed(), result.failed);
+        let files = result.files;
+        let lines = lines.into_inner().unwrap();
         println!(
             "{} lignes d'avancement, dernière : {:?}",
             lines.len(),
             lines.last()
         );
-        assert!(lines.iter().any(|l| l.contains("sheets in")));
+        assert!(lines.iter().any(|l| l.starts_with("PAGES ")));
         assert!(lines.iter().any(|l| l.contains("StepMonitoring")));
         for f in &files {
             println!("{} : {} octets (base64)", f.name, f.data.len());
         }
         assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn lit_le_nombre_de_pages_d_audiveris() {
+        assert_eq!(
+            sheets_in("INFO  [Ballade]  Book 560  | 9 sheets in /tmp/Ballade.pdf"),
+            Some(9)
+        );
+        assert_eq!(sheets_in("| 1 sheet in x"), Some(1));
+        assert_eq!(sheets_in("Exporting sheet"), None);
+        assert_eq!(sheets_in("12 sheets in x"), Some(12));
     }
 
     #[test]
@@ -274,11 +422,18 @@ fn save_backup(app: tauri::AppHandle, name: String, content: String) -> Result<S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Mises à jour de l'application de bureau : proposées dans la bibliothèque (src/lib/nativeUpdate.ts).
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+    builder
         .invoke_handler(tauri::generate_handler![
             save_backup,
             audiveris_path,
-            convert_pdf
+            convert_pdf,
+            cancel_pdf
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Flûte Partitions");
