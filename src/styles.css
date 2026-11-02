@@ -1908,3 +1908,6 @@ button.link {
 .note-editor .edit-message { margin: 0.6rem 0 0; font-weight: 600; }
 .note-editor .edit-tip { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.85rem; }
 .sheet .editing { cursor: pointer; }
+
+.import-progress-tip { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--ink-secondary); }
+.import-cancel { margin-top: 0.5rem; }

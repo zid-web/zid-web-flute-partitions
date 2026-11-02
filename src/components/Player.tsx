@@ -284,7 +284,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         }
         // Partition affichée : votre partie, plus la 2ᵉ flûte s'il y en a une (notes et curseur visibles
         // pendant qu'elle joue). Le micro et les couleurs ne suivent que votre partie, la première.
-        displayAccompRef.current = entry.kind === "piano" ? null : await loadAccompanimentXml(entry).catch(() => null);
+        displayAccompRef.current = accompanimentXml; // déjà chargé plus haut (une seule lecture)
         const display = entry.kind === "piano" ? xml : withPartnerFlutes(xml, displayAccompRef.current);
         return controller.load(display);
       })

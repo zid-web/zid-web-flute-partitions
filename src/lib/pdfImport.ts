@@ -45,14 +45,20 @@ function fromBase64(data: string): Uint8Array {
   return bytes;
 }
 
+export interface PdfConversion {
+  /** Fichiers .mxl, un ou plusieurs par page (« p003~nom.mvt2.mxl »), dans l'ordre des pages. */
+  pages: { name: string; bytes: Uint8Array }[];
+  /** Nombre de pages du PDF, et pages non reconnues (sautées). */
+  pageCount: number;
+  failed: number[];
+}
+
 /**
- * Reconnaît un PDF avec Audiveris : un MusicXML compressé (.mxl) par morceau reconnu.
- * `onProgress` reçoit l'avancement (pages, étapes) lu dans le journal d'Audiveris.
+ * Reconnaît un PDF avec Audiveris, page par page (plusieurs pages à la fois ; une page illisible
+ * ou bloquée est sautée sans faire échouer les autres). `onProgress` reçoit l'avancement lu dans
+ * le journal d'Audiveris. Les pages sont ensuite rassemblées (`assembleOmrPages`).
  */
-export async function convertPdf(
-  file: File,
-  onProgress?: (p: OmrProgress) => void,
-): Promise<{ name: string; bytes: Uint8Array }[]> {
+export async function convertPdf(file: File, onProgress?: (p: OmrProgress) => void): Promise<PdfConversion> {
   const invoke = nativeInvoke();
   if (!invoke) throw new Error(PDF_HELP_WEB);
   if (!(await audiverisPath())) throw new Error(PDF_HELP_NO_AUDIVERIS);
@@ -65,8 +71,19 @@ export async function convertPdf(
       }).catch(() => () => {})
     : () => {};
   try {
-    const files = (await invoke("convert_pdf", { name: file.name, data })) as { name: string; data: string }[];
-    return files.map((f) => ({ name: f.name, bytes: fromBase64(f.data) }));
+    // l'application native renvoie ses erreurs sous forme de texte : on garde son message
+    const result = (await invoke("convert_pdf", { name: file.name, data }).catch((e: unknown) => {
+      throw e instanceof Error ? e : new Error(String(e));
+    })) as {
+      files: { name: string; data: string }[];
+      pages: number;
+      failed: number[];
+    };
+    return {
+      pages: result.files.map((f) => ({ name: f.name, bytes: fromBase64(f.data) })),
+      pageCount: result.pages,
+      failed: result.failed,
+    };
   } finally {
     try {
       stop();
@@ -74,4 +91,9 @@ export async function convertPdf(
       /* écoute déjà terminée */
     }
   }
+}
+
+/** Arrête la conversion en cours (les Audiveris lancés sont arrêtés). */
+export async function cancelPdf(): Promise<void> {
+  await nativeInvoke()?.("cancel_pdf").catch(() => {});
 }
