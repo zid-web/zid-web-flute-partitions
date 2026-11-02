@@ -14,6 +14,14 @@ export interface ScoreStep {
   /** Début et durée en secondes au tempo écrit (changements de tempo compris), pour le mode Écouter. */
   startSec: number;
   seconds: number;
+  /** Indice de la mesure (0 = première), pour travailler un passage en boucle. */
+  measure: number;
+}
+
+/** Signature d'une mesure (4/4, 6/8…). */
+export interface Meter {
+  beats: number;
+  beatType: number;
 }
 
 export const COLORS = {
@@ -52,6 +60,8 @@ export class ScoreController {
    */
   positions: { cursorIndex: number; startSec: number }[] = [];
   private gnotesByCursor = new Map<number, GraphicalNote[]>();
+  /** Signature de chaque mesure (indice 0 = première mesure). */
+  meters: Meter[] = [];
   private cursorIndex = 0;
 
   constructor(container: HTMLElement) {
@@ -89,6 +99,10 @@ export class ScoreController {
     this.steps = [];
     this.positions = [];
     this.gnotesByCursor.clear();
+    this.meters = (this.osmd.Sheet?.SourceMeasures ?? []).map((sm) => ({
+      beats: sm.ActiveTimeSignature?.Numerator ?? 4,
+      beatType: sm.ActiveTimeSignature?.Denominator ?? 4,
+    }));
     // Seule la première partie (la vôtre) est suivie au micro et colorée ; les autres sont affichées.
     const mine = this.osmd.Sheet?.Instruments[0];
     const isMine = (n: Note) => !mine || n.ParentStaffEntry?.ParentStaff?.ParentInstrument === mine;
@@ -122,6 +136,7 @@ export class ScoreController {
           startBeat: beat,
           startSec: sec,
           seconds: beats * secPerBeat,
+          measure: m,
         });
         this.gnotesByCursor.set(i, cursor.GNotesUnderCursor().filter((g) => isMine(g.sourceNote)));
       }
@@ -130,6 +145,16 @@ export class ScoreController {
     }
     cursor.reset();
     this.cursorIndex = 0;
+  }
+
+  /** Nombre de mesures de la partition. */
+  get measureCount(): number {
+    return this.meters.length || (this.steps.at(-1)?.measure ?? 0) + 1;
+  }
+
+  /** Début de la mesure `m` (indice), en secondes au tempo écrit. */
+  measureStartSec(m: number): number {
+    return this.timeline.startSec[m] ?? this.steps.find((s) => s.measure >= m)?.startSec ?? 0;
   }
 
   /** Place le curseur sur la n-ième note à jouer. */
