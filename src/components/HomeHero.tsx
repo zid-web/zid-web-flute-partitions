@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { isDesktopApp, getPlatformLabel } from "../lib/platform";
 
 interface Props {
   totalStars: number;
@@ -25,22 +25,8 @@ export function HomeHero({
   onMyFlute,
   onOpenImport,
 }: Props) {
-  const [copied, setCopied] = useState(false);
-
-  function shareApp() {
-    if (navigator.share) {
-      navigator.share({
-        title: "Flûte Partitions",
-        text: "Application interactive d'apprentissage de la flûte traversière avec reconnaissance de notes au micro !",
-        url: window.location.href,
-      }).catch(() => {});
-    } else {
-      navigator.clipboard.writeText(window.location.href).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2500);
-      }).catch(() => {});
-    }
-  }
+  const isDesktop = isDesktopApp();
+  const platform = getPlatformLabel();
 
   return (
     <section className="hero-banner" aria-label="Présentation de l'application">
@@ -48,11 +34,17 @@ export function HomeHero({
       <div className="hero-content">
         <div className="hero-badge-wrap">
           <span className="hero-pill">
-            <span className="live-dot" aria-hidden="true" /> Studio Interactif de Flûte
+            <span className="live-dot" aria-hidden="true" />{" "}
+            {isDesktop ? `Studio Local · ${platform}` : "Studio Interactif de Flûte"}
           </span>
           <span className="hero-pill secondary">
-            📶 100% Hors-ligne & Libre
+            {isDesktop ? "⚡ Haute Performance Locale" : "📶 100% Hors-ligne & Libre"}
           </span>
+          {isDesktop && (
+            <span className="hero-pill local-highlight">
+              🔒 100% Privé sur cet appareil
+            </span>
+          )}
         </div>
 
         <h1 className="hero-title">
@@ -60,8 +52,9 @@ export function HomeHero({
         </h1>
 
         <p className="hero-lead">
-          Jouez avec votre propre flûte devant le micro : chaque note s'allume instantanément quand vous la réussissez.
-          Profitez d'un accompagnement piano réactif à votre tempo, de doigtés dynamiques et de partitions du domaine public.
+          {isDesktop
+            ? "Installez votre ordinateur sur votre pupitre et jouez directement devant le micro : chaque note s'allume instantanément quand vous la réussissez. Moteur audio local, reconnaissance de partitions PDF et accompagnement piano haute fidélité."
+            : "Jouez avec votre propre flûte devant le micro : chaque note s'allume instantanément quand vous la réussissez. Profitez d'un accompagnement piano réactif à votre tempo, de doigtés dynamiques et de partitions du domaine public."}
         </p>
 
         <div className="hero-actions">
@@ -129,7 +122,7 @@ export function HomeHero({
             <span className="preview-dot red" />
             <span className="preview-dot yellow" />
             <span className="preview-dot green" />
-            <span className="preview-title">Aperçu interactif</span>
+            <span className="preview-title">{isDesktop ? "Moteur Bureau Local" : "Aperçu interactif"}</span>
           </div>
           <div className="preview-body">
             <div className="preview-note-live">
@@ -147,7 +140,7 @@ export function HomeHero({
               <span className="animated-note gold" style={{ left: "80%" }}>♫</span>
             </div>
             <div className="preview-info">
-              <span>🎤 Micro actif</span>
+              <span>🎤 Micro local</span>
               <span>🎹 Piano en tempo</span>
             </div>
           </div>

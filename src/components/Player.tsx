@@ -116,6 +116,51 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
   const [hasFlute2, setHasFlute2] = useState(false);
   const [flute2On, setFlute2On] = useState(true);
 
+  // Zoom et mode pupitre pour utilisation en local sur ordinateur
+  const [zoom, setZoom] = useState(1.0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const applyZoom = useCallback((next: number) => {
+    const clamped = Math.min(2.0, Math.max(0.6, Math.round(next * 10) / 10));
+    setZoom(clamped);
+    scoreRef.current?.setZoom(clamped);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        applyZoom(zoom + 0.15);
+      } else if (e.key === "-") {
+        e.preventDefault();
+        applyZoom(zoom - 0.15);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        applyZoom(1.0);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [zoom, applyZoom, toggleFullscreen]);
+
   const listenStepRef = useRef(0);
   const modeRef = useRef<Mode>("idle");
   modeRef.current = mode;
@@ -555,7 +600,7 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
 
   return (
     <main className={mode === "listen" || mode === "mic" ? "player playing" : "player"}>
-      <header className="player-bar">
+      <header className="player-bar" data-tauri-drag-region>
         <button className="ghost" onClick={onBack}>
           ← Bibliothèque
         </button>
@@ -565,6 +610,24 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
             {entry.composer} · Niveau {entry.level} ({LEVEL_LABELS[entry.level]})
             {movements.length > 1 && ` · Mouvement ${movementIndex + 1}/${movements.length}`}
           </span>
+        </div>
+        <div className="player-desktop-tools">
+          <div className="zoom-controls" role="group" aria-label="Zoom de la partition">
+            <button className="ghost-pill tool-btn" onClick={() => applyZoom(zoom - 0.15)} title="Réduire la partition (touche -)">
+              🔍 −
+            </button>
+            <span className="zoom-label" title="Échelle">{Math.round(zoom * 100)}%</span>
+            <button className="ghost-pill tool-btn" onClick={() => applyZoom(zoom + 0.15)} title="Agrandir la partition (touche +)">
+              🔍 +
+            </button>
+          </div>
+          <button
+            className={`ghost-pill pupitre-btn ${isFullscreen ? "active" : ""}`}
+            onClick={toggleFullscreen}
+            title="Mode pupitre plein écran (raccourci : touche F)"
+          >
+            {isFullscreen ? "✕ Quitter pupitre" : "⛶ Mode Pupitre"}
+          </button>
         </div>
         <span className="best">Record : {"★".repeat(bestStars) || "—"}</span>
       </header>
