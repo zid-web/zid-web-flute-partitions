@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
-    "@tauri-apps/plugin-process": "2.3.0",
-    "@tauri-apps/plugin-updater": "2.9.0",
+    "@tauri-apps/plugin-process": "2.4.0",
+    "@tauri-apps/plugin-updater": "2.14.1",
     "jszip": "3.10.1",
     "opensheetmusicdisplay": "1.9.9",
     "pitchy": "4.1.0",
