@@ -5,6 +5,7 @@ import type { PieceProgress } from "../lib/progress";
 import { groupWorks, movementLabel, type LibraryItem } from "../lib/libraryView";
 import { groupHeadings, loadSortKey, saveSortKey, SORT_LABELS, sortEntries, type SortKey } from "../lib/sortScores";
 import { ImportButton } from "./ImportButton";
+import { onScoreImported } from "../lib/importJobs";
 import { HomeHero } from "./HomeHero";
 import { FluteExplorer } from "./FluteExplorer";
 import { HowItWorks } from "./HowItWorks";
@@ -15,7 +16,6 @@ interface Props {
   catalog: CatalogEntry[];
   progress: Record<string, PieceProgress>;
   onOpen: (entry: CatalogEntry) => void;
-  onImported: (entry: CatalogEntry) => void;
   onDelete: (entries: CatalogEntry[]) => void;
   onBackup: () => Promise<string | null>;
   onRestore: (file: File) => Promise<string>;
@@ -55,7 +55,6 @@ export function Library({
   catalog,
   progress,
   onOpen,
-  onImported,
   onDelete,
   onBackup,
   onRestore,
@@ -76,6 +75,18 @@ export function Library({
 
   // Partition qu'on vient d'importer : mise en évidence et amenée à l'écran.
   const [fresh, setFresh] = useState<string | null>(null);
+  // Partition importée pendant qu'on est dans la bibliothèque : montrée tout de suite (l'import
+  // lui-même continue même si l'on quitte la bibliothèque, voir importJobs.ts).
+  useEffect(
+    () =>
+      onScoreImported((entry) => {
+        setTab("mine");
+        setLevel(0);
+        setQuery("");
+        setFresh(entry.id);
+      }),
+    [],
+  );
 
   // Suppression en attente (annulable quelques secondes) : les partitions disparaissent tout de suite.
   const [pending, setPending] = useState<{ entries: CatalogEntry[]; timer: number } | null>(null);
@@ -502,15 +513,7 @@ export function Library({
         {/* Zone d'importation de partitions */}
         <div ref={importSectionRef} className="import-wrapper">
           {!selecting && (
-            <ImportButton
-              onImported={(entry) => {
-                setTab("mine");
-                setLevel(0);
-                setQuery("");
-                setFresh(entry.id);
-                onImported(entry);
-              }}
-            />
+            <ImportButton />
           )}
         </div>
 

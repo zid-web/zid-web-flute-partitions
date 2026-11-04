@@ -1911,3 +1911,15 @@ button.link {
 
 .import-progress-tip { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--ink-secondary); }
 .import-cancel { margin-top: 0.5rem; }
+
+/* Import en arrière-plan : pastille visible hors de la bibliothèque */
+.import-pill { position: fixed; left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 205;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.8rem; max-width: min(460px, calc(100vw - 32px));
+  background: var(--card); color: var(--ink); border: 1px solid var(--border-focus); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 0.55rem 0.9rem; font-size: 0.9rem; }
+.import-pill.done { border-color: var(--good); }
+.import-pill.done.error { border-color: var(--warn); }
+.import-pill-text { flex: 1 1 auto; min-width: 0; }
+.import-pill-bar { order: 5; flex: 1 0 100%; height: 5px; border-radius: 999px; background: rgba(99, 102, 241, 0.15); overflow: hidden; }
+.import-pill-bar span { display: block; height: 100%; background: var(--primary); transition: width 0.3s; }
+.import-dismiss { margin-top: 0.3rem; }
