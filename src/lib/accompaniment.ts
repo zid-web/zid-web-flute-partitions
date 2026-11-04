@@ -88,6 +88,15 @@ export type ScoreKind = "flute" | "flute-piano" | "piano";
 const children = (el: Element, name: string) => Array.from(el.children).filter((c) => c.localName === name);
 const child = (el: Element, name: string) => children(el, name)[0];
 const text = (el: Element | undefined, name: string) => (el ? child(el, name)?.textContent?.trim() : undefined);
+/**
+ * Durée d'une note ou d'un déplacement (`<duration>`), en divisions. Une durée illisible ou
+ * négative (partition reconnue automatiquement) compte pour 0 : sinon tout le calendrier du
+ * morceau devient NaN et « Écouter » ne peut plus rien jouer.
+ */
+export function durationOf(el: Element): number {
+  const v = Number(text(el, "duration") ?? 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
 
 function partNames(root: Element): Map<string, string> {
   const names = new Map<string, string>();
@@ -186,7 +195,7 @@ function rawMeasureLength(measure: Element): number {
   let pos = 0;
   let length = 0;
   for (const el of Array.from(measure.children)) {
-    const d = Number(text(el, "duration") ?? 0);
+    const d = durationOf(el);
     if (el.localName === "backup") pos -= d;
     else if (el.localName === "forward" || (el.localName === "note" && !child(el, "chord") && !child(el, "grace") && !child(el, "cue"))) {
       pos += d;
@@ -373,12 +382,12 @@ export function measureTimeline(xmlOrDoc: string | Document): MeasureTimeline {
       let length = 0;
       for (const el of Array.from(measure.children)) {
         if (el.localName === "attributes") divisions = Number(text(el, "divisions")) || divisions;
-        else if (el.localName === "backup") pos -= Number(text(el, "duration") ?? 0) / divisions;
+        else if (el.localName === "backup") pos -= durationOf(el) / divisions;
         else if (el.localName === "forward") {
-          pos += Number(text(el, "duration") ?? 0) / divisions;
+          pos += durationOf(el) / divisions;
           length = Math.max(length, pos);
         } else if (el.localName === "note" && !child(el, "chord") && !child(el, "grace") && !child(el, "cue")) {
-          pos += Number(text(el, "duration") ?? 0) / divisions;
+          pos += durationOf(el) / divisions;
           length = Math.max(length, pos);
         }
       }
@@ -460,13 +469,13 @@ function readNotes(xml: string, partIds?: string[]): { notes: PianoNote[]; ornam
             wedge = { dir: w === "crescendo" ? 1 : -1, from: velocity, notes: [] };
           }
         } else if (el.localName === "backup") {
-          pos -= Number(text(el, "duration") ?? 0) / divisions;
+          pos -= durationOf(el) / divisions;
         } else if (el.localName === "forward") {
-          pos += Number(text(el, "duration") ?? 0) / divisions;
+          pos += durationOf(el) / divisions;
         } else if (el.localName === "note") {
           if (child(el, "grace") || child(el, "cue")) continue;
           if (wedge?.stopped) endWedge(); // soufflet fini sans nuance d'arrivée écrite
-          const quarters = Number(text(el, "duration") ?? 0) / divisions;
+          const quarters = durationOf(el) / divisions;
           const isChord = Boolean(child(el, "chord"));
           const start = isChord ? lastStart : pos;
           if (!isChord) {

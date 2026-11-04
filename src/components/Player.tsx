@@ -279,8 +279,13 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         const place = (n: PianoNote): PianoNote => ({ ...n, startSec: warp(n.startSec), seconds: warp(n.startSec + n.seconds) - warp(n.startSec) });
         warpRef.current = warp;
         // triées par début : l'écoute les programme au fil de l'eau (NoteStream)
+        // (notes sans heure valable écartées : une seule bloquerait toute la suite)
         const byStart = (a: PianoNote, b: PianoNote) => a.startSec - b.startSec;
-        warpedRef.current = { piano: pianoNotesRef.current.map(place).sort(byStart), flute2: flute2NotesRef.current.map(place).sort(byStart) };
+        const valid = (n: PianoNote) => Number.isFinite(n.startSec) && Number.isFinite(n.seconds) && n.seconds >= 0;
+        warpedRef.current = {
+          piano: pianoNotesRef.current.map(place).filter(valid).sort(byStart),
+          flute2: flute2NotesRef.current.map(place).filter(valid).sort(byStart),
+        };
         if (!cancelled) {
           setHasPiano(pianoNotesRef.current.length > 0);
           setHasFlute2(flute2NotesRef.current.length > 0);
@@ -735,6 +740,10 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       });
       // Liaisons fixées sur toute la mélodie (programmée ensuite par morceaux) : écrites, sinon
       // déduites de l'enchaînement des notes, comme le faisait la programmation d'un seul tenant.
+      // une note sans heure valable (partition reconnue de travers) ne doit pas tout arrêter
+      for (let i = melody.length - 1; i >= 0; i--) {
+        if (!Number.isFinite(melody[i].start) || !Number.isFinite(melody[i].duration)) melody.splice(i, 1);
+      }
       melody.forEach((n, i) => {
         const next = melody[i + 1];
         n.slurred ??= next !== undefined && Math.abs(next.start - (n.start + n.duration)) < 0.01;
@@ -847,14 +856,26 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
 
   const startListen = useCallback(async () => {
     restart();
-    await ensureAudio();
-    setMode("listen");
-    // boucle : le passage choisi, en continu ; sinon tout le morceau
-    const range = currentRange();
-    rangeRef.current = range;
-    listenStepRef.current = range.first;
-    if (practiceRef.current.loopOn) playFrom(range.first, range.last);
-    else playFrom(0);
+    setMicError(null);
+    if ((scoreRef.current?.steps.length ?? 0) === 0 && pianoNotesRef.current.length === 0) {
+      setMicError("⚠️ Aucune note à jouer n'a été trouvée dans cette partition (reconnaissance du PDF ratée ?).");
+      return;
+    }
+    try {
+      await ensureAudio();
+      setMode("listen");
+      // boucle : le passage choisi, en continu ; sinon tout le morceau
+      const range = currentRange();
+      rangeRef.current = range;
+      listenStepRef.current = range.first;
+      if (practiceRef.current.loopOn) playFrom(range.first, range.last);
+      else playFrom(0);
+    } catch (e) {
+      // jamais d'échec muet : on dit pourquoi l'écoute n'a pas démarré
+      restart();
+      setMode("idle");
+      setMicError(`⚠️ Écoute impossible : ${e instanceof Error ? e.message : String(e)}`);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restart, playFrom, ensureAudio]);
 

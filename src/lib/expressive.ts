@@ -1,4 +1,4 @@
-import { measureTimeline } from "./accompaniment";
+import { durationOf, measureTimeline } from "./accompaniment";
 
 /**
  * Points d'orgue et changements de tempo écrits en toutes lettres (logique pure, testée) :
@@ -50,8 +50,8 @@ export function readExpressiveMarks(xmlOrDoc: string | Document): ExpressiveMark
       let lastStart = 0;
       for (const el of Array.from(measure.children)) {
         if (el.localName === "attributes") divisions = Number(text(el, "divisions")) || divisions;
-        else if (el.localName === "backup") pos -= Number(text(el, "duration") ?? 0) / divisions;
-        else if (el.localName === "forward") pos += Number(text(el, "duration") ?? 0) / divisions;
+        else if (el.localName === "backup") pos -= durationOf(el) / divisions;
+        else if (el.localName === "forward") pos += durationOf(el) / divisions;
         else if (el.localName === "direction") {
           const words = Array.from(el.getElementsByTagName("words"))
             .map((w) => w.textContent ?? "")
@@ -63,7 +63,7 @@ export function readExpressiveMarks(xmlOrDoc: string | Document): ExpressiveMark
           else if (ACCEL.test(words)) marks.push({ at, kind: "accel", measure: m });
         } else if (el.localName === "note") {
           if (children(el, "grace").length || children(el, "cue").length) continue;
-          const quarters = Number(text(el, "duration") ?? 0) / divisions;
+          const quarters = durationOf(el) / divisions;
           const isChord = children(el, "chord").length > 0;
           const noteStart = isChord ? lastStart : pos;
           if (!isChord) {

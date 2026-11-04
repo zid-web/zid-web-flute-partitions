@@ -51,3 +51,15 @@ describe("points d'orgue et ralentis en mode Écouter", () => {
     expect(readExpressiveMarks(two).fermatas).toHaveLength(1);
   });
 });
+
+describe("partition reconnue de travers", () => {
+  it("une durée illisible ne rend pas tout le calendrier invalide (NaN)", async () => {
+    const { measureTimeline } = await import("../accompaniment");
+    const bad = piece(n("C") + `<note><pitch><step>D</step><octave>5</octave></pitch><duration>abc</duration></note>` + n("E"), four);
+    const t = measureTimeline(bad);
+    expect(t.startSec.every(Number.isFinite)).toBe(true);
+    expect(t.startSec[1]).toBeCloseTo(2, 6); // la note illisible compte pour 0
+    const w = timeWarp(readExpressiveMarks(bad));
+    expect(Number.isFinite(w(5))).toBe(true);
+  });
+});
