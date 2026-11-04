@@ -37,6 +37,27 @@ fn find_audiveris() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// Emplacement de l'application en cours d'exécution : une mise à jour ne peut pas remplacer une
+/// application lancée depuis l'image disque (.dmg) ou isolée par macOS (« App Translocation »).
+#[tauri::command]
+fn app_location() -> Option<String> {
+    std::env::current_exe().ok().map(|p| p.display().to_string())
+}
+
+/// Ouvre la page de téléchargement des versions dans le navigateur (mise à jour à la main).
+#[tauri::command]
+fn open_download_page() -> Result<(), String> {
+    const URL: &str = "https://github.com/zid-web/zid-web-flute-partitions/releases/latest";
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(URL).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", "start", "", URL]).status()
+    } else {
+        Command::new("xdg-open").arg(URL).status()
+    };
+    status.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Chemin d'Audiveris, s'il est installé (l'écran d'import propose alors les PDF).
 #[tauri::command]
 fn audiveris_path() -> Option<String> {
@@ -433,7 +454,9 @@ pub fn run() {
             save_backup,
             audiveris_path,
             convert_pdf,
-            cancel_pdf
+            cancel_pdf,
+            app_location,
+            open_download_page
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Flûte Partitions");
