@@ -17,6 +17,11 @@ on:
         type: choice
         options: [toutes, mac]
         default: toutes
+      machine_mac:
+        description: "Machine Mac de GitHub (Intel si les machines Apple Silicon sont saturées)"
+        type: choice
+        options: [macos-latest, macos-15-intel]
+        default: macos-latest
 
 permissions:
   contents: write
@@ -26,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.plateformes == 'mac' && '[{"platform":"macos-latest","args":"--target universal-apple-darwin"}]' || '[{"platform":"macos-latest","args":"--target universal-apple-darwin"},{"platform":"windows-latest","args":""},{"platform":"ubuntu-22.04","args":""}]') }}
+        include: ${{ fromJSON(format(inputs.plateformes == 'mac' && '[{{"platform":"{0}","args":"--target universal-apple-darwin"}}]' || '[{{"platform":"{0}","args":"--target universal-apple-darwin"}},{{"platform":"windows-latest","args":""}},{{"platform":"ubuntu-22.04","args":""}}]', inputs.machine_mac || 'macos-latest')) }}
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +41,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -48,7 +53,7 @@ jobs:
       # sans, signature « ad hoc » (sans certificat) — passer des variables vides ferait échouer la
       # construction (« failed to import the signing certificate »).
       - name: Signature macOS
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
