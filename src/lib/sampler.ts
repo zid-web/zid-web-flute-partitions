@@ -14,8 +14,11 @@ import { dynamicGain, type ScheduledNote } from "./synth";
 export interface FlutePlayer {
   readonly ctx: BaseAudioContext;
   resume(): Promise<void>;
-  /** Programme une mélodie ; renvoie l'heure audio du départ. */
-  schedule(notes: ScheduledNote[], lead?: number): number;
+  /**
+   * Programme une mélodie ; renvoie l'heure audio du départ (`at` si donnée : suite d'une mélodie
+   * déjà commencée, programmée par morceaux).
+   */
+  schedule(notes: ScheduledNote[], lead?: number, at?: number, previous?: ScheduledNote): number;
   play(midi: number, durationSec: number): void;
   /**
    * Programme une autre voix (2ᵉ flûte d'un duo) : `t0` = heure audio du temps `origin` de la
@@ -150,14 +153,15 @@ export class SampledFlute implements FlutePlayer {
     if (this.ctx instanceof AudioContext && this.ctx.state === "suspended") await this.ctx.resume();
   }
 
-  schedule(notes: ScheduledNote[], lead = 0.12): number {
-    const t0 = this.ctx.currentTime + lead;
+  schedule(notes: ScheduledNote[], lead = 0.12, at?: number, previous?: ScheduledNote): number {
+    const t0 = at ?? this.ctx.currentTime + lead;
     notes.forEach((n, i) => {
       const next = notes[i + 1];
       const adjacent = (a: ScheduledNote, b: ScheduledNote) => Math.abs(b.start - (a.start + a.duration)) < 0.01;
       // Liaisons écrites si la partition en donne, sinon déduites de l'enchaînement des notes.
       const legato = n.slurred ?? (next !== undefined && adjacent(n, next));
-      const prev = notes[i - 1];
+      // `previous` : dernière note du morceau précédent (mélodie programmée par morceaux)
+      const prev = i === 0 ? previous : notes[i - 1];
       const slurredIn = prev !== undefined && (prev.slurred ?? adjacent(prev, n));
       this.note(n.midi, t0 + n.start, n.duration, legato, slurredIn, n.velocity, n.gate);
     });

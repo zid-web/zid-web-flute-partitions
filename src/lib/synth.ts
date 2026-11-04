@@ -95,8 +95,8 @@ export class FluteSynth {
   }
 
   /** Programme toute une mélodie ; renvoie l'heure audio du départ. */
-  schedule(notes: ScheduledNote[], lead = 0.12): number {
-    const t0 = this.ctx.currentTime + lead;
+  schedule(notes: ScheduledNote[], lead = 0.12, at?: number, _previous?: ScheduledNote): number {
+    const t0 = at ?? this.ctx.currentTime + lead;
     notes.forEach((n, i) => {
       const next = notes[i + 1];
       // Liaison : une note suivie immédiatement d'une autre est à peine détachée (coup de langue léger).

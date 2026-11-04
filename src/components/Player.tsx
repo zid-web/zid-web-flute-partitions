@@ -34,6 +34,7 @@ import { PianoSampler } from "../lib/piano";
 import { SampledFlute, type FlutePlayer } from "../lib/sampler";
 import { FluteSynth } from "../lib/synth";
 import { Fingering } from "./Fingering";
+import { NoteStream, SCHEDULE_AHEAD, SCHEDULE_EVERY_MS } from "../lib/noteStream";
 
 interface Props {
   entry: CatalogEntry;
@@ -277,7 +278,9 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
         const warp = timeWarp(marks);
         const place = (n: PianoNote): PianoNote => ({ ...n, startSec: warp(n.startSec), seconds: warp(n.startSec + n.seconds) - warp(n.startSec) });
         warpRef.current = warp;
-        warpedRef.current = { piano: pianoNotesRef.current.map(place), flute2: flute2NotesRef.current.map(place) };
+        // triées par début : l'écoute les programme au fil de l'eau (NoteStream)
+        const byStart = (a: PianoNote, b: PianoNote) => a.startSec - b.startSec;
+        warpedRef.current = { piano: pianoNotesRef.current.map(place).sort(byStart), flute2: flute2NotesRef.current.map(place).sort(byStart) };
         if (!cancelled) {
           setHasPiano(pianoNotesRef.current.length > 0);
           setHasFlute2(flute2NotesRef.current.length > 0);
@@ -730,12 +733,39 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
           slurred: n.slurred,
         }));
       });
-      const t0 = pianoOnly ? synth.ctx.currentTime + 0.12 : synth.schedule(melody);
+      // Liaisons fixées sur toute la mélodie (programmée ensuite par morceaux) : écrites, sinon
+      // déduites de l'enchaînement des notes, comme le faisait la programmation d'un seul tenant.
+      melody.forEach((n, i) => {
+        const next = melody[i + 1];
+        n.slurred ??= next !== undefined && Math.abs(next.start - (n.start + n.duration)) < 0.01;
+      });
+      const t0 = synth.ctx.currentTime + 0.12;
       // Piano (accompagnement, ou partition pour piano seul) : même horloge, même tempo.
       // accompagnement déjà placé sur le temps joué (points d'orgue, ralentis)
       const placed = { origin: W(origin), until: until === Infinity ? Infinity : W(until), speed };
-      if (pianoRef.current && (pianoOn || pianoOnly)) pianoRef.current.schedule(warpedRef.current.piano, t0, placed);
-      if (flute2On && !pianoOnly) synth.scheduleAt(warpedRef.current.flute2, t0, placed);
+      // Programmation au fil de l'eau : seulement les secondes à venir, en continu. Tout programmer
+      // d'un coup figeait l'application sur une grande partition (orchestre : des dizaines de
+      // milliers de notes d'accompagnement).
+      const piano = pianoRef.current && (pianoOn || pianoOnly) ? pianoRef.current : null;
+      const playedAt = (n: PianoNote) => t0 + (n.startSec - placed.origin) / speed;
+      const streams = {
+        melody: new NoteStream(pianoOnly ? [] : melody, (n) => t0 + n.start),
+        piano: new NoteStream(piano ? warpedRef.current.piano : [], playedAt),
+        flute2: new NoteStream(flute2On && !pianoOnly ? warpedRef.current.flute2 : [], playedAt),
+      };
+      let lastTune: (typeof melody)[number] | undefined;
+      const pump = () => {
+        const horizon = synth.ctx.currentTime + SCHEDULE_AHEAD;
+        const tune = streams.melody.take(horizon);
+        if (tune.length) synth.schedule(tune, 0, t0, lastTune);
+        if (tune.length) lastTune = tune[tune.length - 1];
+        const chords = streams.piano.take(horizon);
+        if (piano && chords.length) piano.schedule(chords, t0, placed);
+        const second = streams.flute2.take(horizon);
+        if (second.length) synth.scheduleAt(second, t0, placed);
+      };
+      pump();
+      timersRef.current.push(window.setInterval(pump, SCHEDULE_EVERY_MS));
       // Le curseur suit l'horloge audio, pas des minuteries : à chaque image, on regarde l'instant
       // réellement entendu (latence de sortie de la carte son comprise) et on place le curseur sur
       // la note qui sonne. Si la page a été ralentie, il rattrape aussitôt au lieu d'accumuler du retard.
@@ -744,9 +774,11 @@ export function Player({ entry, bestStars, onBack, onProgress, movements = [entr
       const starts = steps.map((s) => t0 + at(s.startSec));
       const last = steps[steps.length - 1];
       // fin : après votre dernière note et après celle de la 2ᵉ flûte, si elle finit plus tard
-      const flute2End = flute2On && !pianoOnly
-        ? Math.max(0, ...flute2NotesRef.current.filter((n) => n.startSec < until).map((n) => at(Math.min(n.startSec + n.seconds, until))))
-        : 0;
+      // (boucle, pas d'étalement d'un tableau : une longue partie dépasserait la limite d'arguments)
+      let flute2End = 0;
+      if (flute2On && !pianoOnly) {
+        for (const n of flute2NotesRef.current) if (n.startSec < until) flute2End = Math.max(flute2End, at(Math.min(n.startSec + n.seconds, until)));
+      }
       const endAt = t0 + Math.max(at(last.startSec) + span(last.startSec, last.seconds), flute2End) + 0.3;
       let shown = -1; // dernière note affichée (indice dans `steps`)
       // Le curseur parcourt toutes les notes jouées (les vôtres et celles de la 2ᵉ flûte affichée),
