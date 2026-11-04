@@ -10,7 +10,7 @@ import { startContentSync } from "./lib/contentSync";
 import { listTakes } from "./lib/myFlute";
 import { onScoreImported } from "./lib/importJobs";
 import { movementsOf } from "./lib/movements";
-import { watchNativeUpdates, type NativeUpdate } from "./lib/nativeUpdate";
+import { openDownloadPage, UpdateError, updateErrorMessage, watchNativeUpdates, type NativeUpdate } from "./lib/nativeUpdate";
 import { loadProgress, type PieceProgress } from "./lib/progress";
 import { saveFile } from "./lib/saveFile";
 import {
@@ -37,6 +37,7 @@ export function App() {
   // l'application ne redémarre pas pour une mise à jour pendant un import
   const importStatus = useImportStatus();
   const [installing, setInstalling] = useState<number | null | "error" | undefined>(undefined);
+  const [updateError, setUpdateError] = useState<{ message: string; installed: boolean } | null>(null);
 
   useEffect(() => {
     let stopSync = () => {};
@@ -90,9 +91,15 @@ export function App() {
   const installNativeUpdate = useCallback(async () => {
     if (!nativeUpdate) return;
     setInstalling(null);
+    setUpdateError(null);
     try {
       await nativeUpdate.install((f) => setInstalling(f));
-    } catch {
+    } catch (e) {
+      setUpdateError(
+        e instanceof UpdateError
+          ? { message: e.message, installed: e.installed }
+          : { message: updateErrorMessage(e), installed: false },
+      );
       setInstalling("error");
     }
   }, [nativeUpdate]);
@@ -166,8 +173,17 @@ export function App() {
             </>
           ) : installing === "error" ? (
             <>
-              <span>⚠️ La mise à jour n'a pas pu être installée. Vérifiez la connexion et réessayez.</span>
-              <button onClick={() => void installNativeUpdate()}>Réessayer</button>
+              <span>
+                {updateError?.installed ? "✅" : "⚠️"} {updateError?.message ?? "La mise à jour n'a pas pu être installée."}
+              </span>
+              {!updateError?.installed && (
+                <>
+                  <button onClick={() => void installNativeUpdate()}>Réessayer</button>
+                  <button className="primary" onClick={() => void openDownloadPage()} title="Ouvre la page de téléchargement dans le navigateur">
+                    Télécharger la version {nativeUpdate.version}
+                  </button>
+                </>
+              )}
             </>
           ) : (
             <>
