@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ImportIndicator } from "./components/ImportIndicator";
+import { useImportStatus } from "./components/ImportButton";
 import { Library } from "./components/Library";
 import { MyFlute } from "./components/MyFlute";
 import { Player } from "./components/Player";
@@ -6,6 +8,7 @@ import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
 import { startContentSync } from "./lib/contentSync";
 import { listTakes } from "./lib/myFlute";
+import { onScoreImported } from "./lib/importJobs";
 import { movementsOf } from "./lib/movements";
 import { watchNativeUpdates, type NativeUpdate } from "./lib/nativeUpdate";
 import { loadProgress, type PieceProgress } from "./lib/progress";
@@ -31,6 +34,8 @@ export function App() {
   const [updateWaiting, setUpdateWaiting] = useState(false);
   // Application de bureau : nouvelle version publiée, proposée dans la bibliothèque.
   const [nativeUpdate, setNativeUpdate] = useState<NativeUpdate | null>(null);
+  // l'application ne redémarre pas pour une mise à jour pendant un import
+  const importStatus = useImportStatus();
   const [installing, setInstalling] = useState<number | null | "error" | undefined>(undefined);
 
   useEffect(() => {
@@ -60,15 +65,21 @@ export function App() {
     });
     const stopWaiting = onUpdateWaiting(setUpdateWaiting);
     const stopNative = watchNativeUpdates(setNativeUpdate);
+    // Partitions importées en arrière-plan, même si l'on a quitté la bibliothèque entre-temps.
+    const stopImported = onScoreImported((entry) => {
+      setUserScores((list) => [entry, ...list.filter((e) => e.id !== entry.id)]);
+      void requestPersistentStorage();
+    });
     return () => {
       stopSync();
       stopWaiting();
       stopNative();
+      stopImported();
     };
   }, []);
 
   // Une mise à jour de l'application n'est jamais installée pendant un morceau.
-  useEffect(() => setBusy(current !== null || myFlute), [current, myFlute]);
+  useEffect(() => setBusy(current !== null || myFlute || importStatus.kind === "busy"), [current, myFlute, importStatus.kind]);
 
   useEffect(() => {
     if (!news) return;
@@ -130,7 +141,16 @@ export function App() {
         </div>
       )}
       {/* Jamais pendant un morceau : uniquement depuis la bibliothèque. */}
-      {nativeUpdate && !current && !myFlute && (
+      {/* hors de la bibliothèque : l'import continue, sa pastille reste visible */}
+      {(current || myFlute) && (
+        <ImportIndicator
+          onShow={() => {
+            setCurrent(null);
+            setMyFlute(false);
+          }}
+        />
+      )}
+      {nativeUpdate && !current && !myFlute && importStatus.kind !== "busy" && (
         <div className="update-banner" role="status">
           {installing === undefined ? (
             <>
@@ -192,10 +212,6 @@ export function App() {
           onOpen={(entry) => {
             setAutoListen(false);
             setCurrent(entry);
-          }}
-          onImported={(entry) => {
-            setUserScores((list) => [entry, ...list]);
-            void requestPersistentStorage();
           }}
           onBackup={backupUserScores}
           onRestore={restoreBackup}
