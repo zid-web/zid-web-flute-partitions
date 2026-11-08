@@ -61,13 +61,43 @@ export async function listenForNotes(
     },
     onProgress,
   );
-  const ins = INSTRUMENTS[instrument];
-  // seuils de Basic Pitch : attaque 0,5, tenue 0,3, note d'au moins ~90 ms, tessiture de l'instrument
-  const events = outputToNotesPoly(frames, onsets, 0.5, 0.3, 8, true, ins.maxHz, ins.minHz, true);
+  // seuils de Basic Pitch : attaque 0,5, tenue 0,3, note d'au moins ~90 ms ; toute la tessiture :
+  // l'accompagnement (basses, accords) sert à trouver la pulsation et le premier temps, seul
+  // l'instrument choisi est écrit (transcription.ts)
+  void INSTRUMENTS[instrument];
+  const events = outputToNotesPoly(frames, onsets, 0.5, 0.3, 8, true, null, null, true);
+  const env = volumeEnvelope(samples);
   return noteFramesToTime(addPitchBendsToNoteEvents(contours, events)).map((n) => ({
     start: n.startTimeSeconds,
     duration: n.durationSeconds,
     midi: n.pitchMidi,
     amplitude: n.amplitude,
+    dip: attackDip(env, n.startTimeSeconds),
   }));
+}
+
+const ENV_HOP = 0.01; // secondes
+
+/** Volume (moyenne quadratique) toutes les 10 ms. */
+export function volumeEnvelope(samples: Float32Array, rate = MODEL_RATE): Float32Array {
+  const hop = Math.round(rate * ENV_HOP);
+  const env = new Float32Array(Math.ceil(samples.length / hop));
+  for (let k = 0; k < env.length; k++) {
+    let sum = 0;
+    const end = Math.min(samples.length, (k + 1) * hop);
+    for (let i = k * hop; i < end; i++) sum += samples[i] * samples[i];
+    env[k] = Math.sqrt(sum / Math.max(1, end - k * hop));
+  }
+  return env;
+}
+
+/** Creux de volume avant une attaque : volume minimal juste avant / volume maximal juste après. */
+export function attackDip(env: Float32Array, start: number): number {
+  const at = Math.round(start / ENV_HOP);
+  let before = Infinity;
+  for (let k = Math.max(0, at - 8); k <= Math.max(0, at - 1); k++) before = Math.min(before, env[k] ?? Infinity);
+  let after = 0;
+  for (let k = at; k < Math.min(env.length, at + 6); k++) after = Math.max(after, env[k]);
+  if (!Number.isFinite(before) || after <= 0) return 0;
+  return Math.min(1, before / after);
 }
