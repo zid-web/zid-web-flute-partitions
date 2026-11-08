@@ -27,8 +27,11 @@ export async function audiverisPath(): Promise<string | null> {
 }
 
 export const PDF_HELP_WEB =
-  "Les PDF se convertissent dans l'application pour ordinateur (Mac, Windows) avec Audiveris installé. " +
-  "Ici, convertissez d'abord le PDF en MusicXML (MuseScore : Fichier › Importer un PDF, ou Audiveris), puis importez le .mxl.";
+  "Vous êtes dans la version web (navigateur), qui ne lit pas les PDF. Ouvrez plutôt l'application " +
+  "Flûte Partitions installée sur votre ordinateur (Mac : dossier Applications ; à télécharger sur " +
+  "github.com/zid-web/zid-web-flute-partitions/releases), avec Audiveris installé. Sinon, convertissez " +
+  "d'abord le PDF en MusicXML (MuseScore : Fichier › Importer un PDF), puis importez le .mxl ici. " +
+  "Attention : les partitions importées restent dans l'application (ou le navigateur) où vous les avez importées.";
 export const PDF_HELP_NO_AUDIVERIS =
   "Pour lire un PDF, installez Audiveris (gratuit : github.com/Audiveris/audiveris/releases), puis réessayez.";
 
