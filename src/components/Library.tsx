@@ -20,6 +20,8 @@ interface Props {
   onBackup: () => Promise<string | null>;
   onRestore: (file: File) => Promise<string>;
   onMyFlute: () => void;
+  /** Ouvre « Transcrire un enregistrement ». */
+  onTranscribe: () => void;
 }
 
 const LEVELS = [1, 2, 3, 4, 5] as const;
@@ -59,6 +61,7 @@ export function Library({
   onBackup,
   onRestore,
   onMyFlute,
+  onTranscribe,
 }: Props) {
   const restoreInput = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -266,6 +269,14 @@ export function Library({
           <div className="star-total-badge" title="Total des étoiles obtenues sur vos morceaux">
             ⭐ <span>{totalStars}</span>
           </div>
+
+          <button
+            className="navbar-btn"
+            onClick={onTranscribe}
+            title="Transcrire un enregistrement (audio ou vidéo) de flûte, violon ou piano en partition"
+          >
+            🎼 <span className="btn-text">Transcrire</span>
+          </button>
 
           <button
             className="navbar-btn highlight"

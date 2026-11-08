@@ -87,6 +87,17 @@ export function dismissImportResults(): void {
   if (status.kind === "done") set({ kind: "idle" });
 }
 
+/**
+ * Ajoute à la bibliothèque une partition produite dans l'application (transcription d'un
+ * enregistrement) : mêmes contrôles qu'un import, et la bibliothèque est prévenue.
+ */
+export async function addGeneratedScore(xml: string, name: string): Promise<ImportResult> {
+  const { entry, xml: kept, accompaniment, warnings } = prepareImport(xml, name);
+  const saved = await saveUserScore(entry, kept, accompaniment);
+  importedListeners.forEach((l) => l(saved));
+  return { file: name, entry: saved, warnings };
+}
+
 async function importXml(xml: string, name: string, extraWarnings: string[] = []) {
   const { entry, xml: kept, accompaniment, warnings } = prepareImport(xml, name);
   const saved = await saveUserScore(entry, kept, accompaniment);

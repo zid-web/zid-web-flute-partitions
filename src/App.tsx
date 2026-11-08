@@ -3,6 +3,7 @@ import { ImportIndicator } from "./components/ImportIndicator";
 import { useImportStatus } from "./components/ImportButton";
 import { Library } from "./components/Library";
 import { MyFlute } from "./components/MyFlute";
+import { Transcribe } from "./components/Transcribe";
 import { Player } from "./components/Player";
 import { onUpdateWaiting, setBusy } from "./lib/appUpdate";
 import { loadCatalog, type CatalogEntry } from "./lib/catalog";
@@ -29,6 +30,7 @@ export function App() {
   // Mouvement ouvert par l'enchaînement de l'écoute : il se joue dès qu'il est prêt.
   const [autoListen, setAutoListen] = useState(false);
   const [myFlute, setMyFlute] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [progress, setProgress] = useState<Record<string, PieceProgress>>(loadProgress);
   const [news, setNews] = useState<string | null>(null);
   const [updateWaiting, setUpdateWaiting] = useState(false);
@@ -80,7 +82,7 @@ export function App() {
   }, []);
 
   // Une mise à jour de l'application n'est jamais installée pendant un morceau.
-  useEffect(() => setBusy(current !== null || myFlute || importStatus.kind === "busy"), [current, myFlute, importStatus.kind]);
+  useEffect(() => setBusy(current !== null || myFlute || transcribing || importStatus.kind === "busy"), [current, myFlute, transcribing, importStatus.kind]);
 
   useEffect(() => {
     if (!news) return;
@@ -149,15 +151,16 @@ export function App() {
       )}
       {/* Jamais pendant un morceau : uniquement depuis la bibliothèque. */}
       {/* hors de la bibliothèque : l'import continue, sa pastille reste visible */}
-      {(current || myFlute) && (
+      {(current || myFlute || transcribing) && (
         <ImportIndicator
           onShow={() => {
             setCurrent(null);
             setMyFlute(false);
+            setTranscribing(false);
           }}
         />
       )}
-      {nativeUpdate && !current && !myFlute && importStatus.kind !== "busy" && (
+      {nativeUpdate && !current && !myFlute && !transcribing && importStatus.kind !== "busy" && (
         <div className="update-banner" role="status">
           {installing === undefined ? (
             <>
@@ -218,11 +221,21 @@ export function App() {
           onProgress={setProgress}
           bestStars={progress[current.id]?.stars ?? 0}
         />
+      ) : transcribing ? (
+        <Transcribe
+          onBack={() => setTranscribing(false)}
+          onOpen={(entry) => {
+            setTranscribing(false);
+            setAutoListen(false);
+            setCurrent(entry);
+          }}
+        />
       ) : myFlute ? (
         <MyFlute onBack={() => setMyFlute(false)} onBackup={backupUserScores} onRestore={restoreBackup} />
       ) : (
         <Library
           onMyFlute={() => setMyFlute(true)}
+          onTranscribe={() => setTranscribing(true)}
           catalog={all}
           progress={progress}
           onOpen={(entry) => {
