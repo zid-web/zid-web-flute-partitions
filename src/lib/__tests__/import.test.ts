@@ -175,3 +175,23 @@ describe("import d'une partition", () => {
     expect(await readScoreBytes(new TextEncoder().encode(DUET))).toBe(DUET);
   });
 });
+
+describe("duo de flûtes reconnu depuis un PDF", () => {
+  it("la 2ᵉ partie à une portée, dans l'aigu, devient la 2ᵉ flûte (pas un piano)", async () => {
+    const { isFluteLike } = await import("../import");
+    const part = (notes: string[], extra = "") =>
+      new DOMParser().parseFromString(
+        `<part id="P2"><measure number="1"><attributes><divisions>1</divisions><clef><sign>G</sign><line>2</line></clef>${extra}</attributes>${notes
+          .map((p) => `<note><pitch><step>${p[0]}</step><octave>${p[1]}</octave></pitch><duration>1</duration></note>`)
+          .join("")}</measure></part>`,
+        "application/xml",
+      ).documentElement;
+    expect(isFluteLike(part(["E5", "D5", "C5", "B4", "A4", "G5"]))).toBe(true);
+    expect(isFluteLike(part(["C4", "E4", "G4", "C4"]))).toBe(false); // main droite de piano, grave
+    expect(isFluteLike(part(["C4", "E4", "G4", "C4"]), true)).toBe(true); // …mais aucune clé de fa : duo
+    expect(isFluteLike(part(["E5", "D5", "C5", "B4"], "<staves>2</staves>"))).toBe(false);
+    const bass = part(["E5", "D5", "C5", "B4"]);
+    bass.querySelector("sign")!.textContent = "F";
+    expect(isFluteLike(bass)).toBe(false);
+  });
+});

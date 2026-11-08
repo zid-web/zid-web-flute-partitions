@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { assembleOmrPages, mergeScorePages } from "../omrPages";
+import { assembleOmrPages, mergeScorePages, splitAtFinalBarlines, startsIndented } from "../omrPages";
 
 const note = (step: string) => `<note><pitch><step>${step}</step><octave>5</octave></pitch><duration>4</duration></note>`;
 const page = (parts: string[][]) => `<?xml version="1.0"?><score-partwise><part-list>${parts
@@ -40,10 +40,61 @@ describe("pages reconnues séparément, rassemblées", () => {
       { name: "p004~Sonate.mxl", xml: page([["G"]]) },
     ]);
     expect(pieces.map((p) => [p.suffix, p.pages])).toEqual([
-      ["", [1, 2, 3]],
+      [".mvt1", [1, 2, 3]],
       [".mvt2", [3, 4]],
     ]);
     expect(steps(pieces[0].xml, 0)).toEqual(["C", "D", "E"]);
     expect(steps(pieces[1].xml, 0)).toEqual(["F", "G"]);
+  });
+});
+
+describe("recueil de plusieurs morceaux (ex. Three Christmas Carols)", () => {
+  // une page = un morceau ; `final` : barre finale à la fin ; `indent` : premier système en retrait
+  const sys = (left: number) => `<print new-system="yes"><system-layout><system-margins><left-margin>${left}</left-margin></system-margins></system-layout></print>`;
+  const piece = (steps: string[], { final = false, indent = false } = {}) =>
+    `<?xml version="1.0"?><score-partwise><part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list><part id="P1">${steps
+      .map(
+        (st, k) =>
+          `<measure number="${k + 1}">${k === 0 ? `<print><system-layout><system-margins><left-margin>${indent ? 90 : 60}</left-margin></system-margins></system-layout></print><attributes><divisions>4</divisions><key><fifths>1</fifths></key><clef><sign>G</sign><line>2</line></clef></attributes>` : k === 2 ? sys(60) : ""}${note(st)}${final && k === steps.length - 1 ? '<barline location="right"><bar-style>light-heavy</bar-style></barline>' : ""}</measure>`,
+      )
+      .join("")}</part></score-partwise>`;
+
+  it("barre finale en bas de page : la page suivante est un autre morceau", () => {
+    const pieces = assembleOmrPages([
+      { name: "p001~Noels.mxl", xml: piece(["C", "D", "E", "F"], { final: true }) },
+      { name: "p002~Noels.mxl", xml: piece(["G", "A", "B"]) },
+    ]);
+    expect(pieces.map((p) => p.pages)).toEqual([[1], [2]]);
+  });
+
+  it("premier système en retrait : nouveau morceau, même sans barre finale reconnue", () => {
+    const pieces = assembleOmrPages([
+      { name: "p001~Noels.mxl", xml: piece(["C", "D", "E"]) },
+      { name: "p002~Noels.mxl", xml: piece(["G", "A", "B"], { indent: true }) },
+      { name: "p003~Noels.mxl", xml: piece(["E", "F", "G"]) }, // suite du 2ᵉ morceau
+    ]);
+    expect(pieces.map((p) => p.pages)).toEqual([[1], [2, 3]]);
+    expect(startsIndented(piece(["C", "D", "E"], { indent: true }))).toBe(true);
+    expect(startsIndented(piece(["C", "D", "E"]))).toBe(false);
+  });
+
+  it("barre finale en milieu de page, en fin de système : la page est coupée, clé et armure recopiées", () => {
+    const xml = piece(["C", "D", "E", "F"]).replace("</note></measure><measure number=\"3\">", '</note><barline location="right"><bar-style>light-heavy</bar-style></barline></measure><measure number="3">');
+    const chunks = splitAtFinalBarlines(xml);
+    expect(chunks).toHaveLength(2);
+    expect(steps(chunks[0], 0)).toEqual(["C", "D"]);
+    expect(steps(chunks[1], 0)).toEqual(["E", "F"]);
+    const second = doc(chunks[1]).querySelector("measure")!;
+    expect(second.getAttribute("number")).toBe("1");
+    expect(second.querySelector("attributes > divisions")?.textContent).toBe("4");
+    expect(second.querySelector("attributes > key > fifths")?.textContent).toBe("1");
+    expect(second.querySelector("attributes > clef > sign")?.textContent).toBe("G");
+    expect(assembleOmrPages([{ name: "p001~Noels.mxl", xml }])).toHaveLength(2);
+  });
+
+  it("une reprise (barre finale suivie d'un début de reprise) ne coupe pas le morceau", () => {
+    const xml = piece(["C", "D", "E", "F"])
+      .replace("</note></measure><measure number=\"3\">", '</note><barline location="right"><bar-style>light-heavy</bar-style></barline></measure><measure number="3"><barline location="left"><bar-style>heavy-light</bar-style><repeat direction="forward"/></barline>');
+    expect(splitAtFinalBarlines(xml)).toHaveLength(1);
   });
 });
