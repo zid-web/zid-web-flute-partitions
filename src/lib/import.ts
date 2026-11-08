@@ -85,6 +85,29 @@ const GENERIC_PART = /^\s*(voice|voix|part|partie|staff|portée|instrument|p)?\s
  * dans le système ; les autres deviennent des parties de piano. La flûte est nettoyée (une seule
  * voix, mesures complètes) pour l'affichage. Renvoie true si la partition a été remise en ordre.
  */
+/**
+ * Partie reconnue qui ressemble à une flûte : une seule portée, clés de sol uniquement, et
+ * presque toutes ses notes dans la tessiture de la flûte (Si3–Ré7), plutôt aiguës (médiane ≥ La4),
+ * jouées une à une (presque pas d'accords).
+ */
+export function isFluteLike(part: Element, noPianoInScore = false): boolean {
+  if (Array.from(part.getElementsByTagName("staves")).some((s) => Number(s.textContent) >= 2)) return false;
+  const clefs = Array.from(part.getElementsByTagName("clef")).map((c) => c.querySelector(":scope > sign")?.textContent?.trim());
+  if (clefs.some((c) => c && c !== "G")) return false;
+  const STEP: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  const midis = Array.from(part.getElementsByTagName("pitch")).map((p) => {
+    const step = p.querySelector(":scope > step")?.textContent?.trim() ?? "C";
+    return (Number(p.querySelector(":scope > octave")?.textContent) + 1) * 12 + (STEP[step] ?? 0) + Number(p.querySelector(":scope > alter")?.textContent ?? 0);
+  }).filter(Number.isFinite);
+  if (midis.length < 4) return false;
+  const inRange = midis.filter((m) => m >= 59 && m <= 98).length / midis.length;
+  const sorted = [...midis].sort((a, b) => a - b);
+  // la flûte joue une note à la fois (peu d'accords), et plutôt dans l'aigu (médiane ≥ La4)
+  const chords = part.getElementsByTagName("chord").length / midis.length;
+  // aucune clé de fa dans toute la partition : pas de piano possible, la tessiture suffit
+  return inRange >= 0.9 && (noPianoInScore || sorted[sorted.length >> 1] >= 69) && chords < 0.1;
+}
+
 export function adoptOmrFlute(doc: Document): boolean {
   const root = doc.documentElement;
   const parts = Array.from(root.querySelectorAll(":scope > part"));
@@ -234,11 +257,25 @@ export function adoptOmrFlute(doc: Document): boolean {
   sp.setAttribute("id", "OMR-FLUTE");
   sp.append(el("part-name", "Flûte"));
   list?.insertBefore(sp, list.firstChild);
-  generic.forEach((p, i) => {
-    const name = list?.querySelector(`:scope > score-part[id="${idOf(p)}"] > part-name`);
-    if (name) name.textContent = `Piano (${i + 1})`;
+  // Une partie à une seule portée, en clé de sol, dans la tessiture de la flûte : la 2ᵉ flûte d'un
+  // duo (jouée par l'application, affichée sous votre partie) ; sinon du piano.
+  let flutes = 1;
+  let pianoCount = 0;
+  const noPiano = pianos.size === 0 && Array.from(root.getElementsByTagName("clef")).every((c) => c.querySelector(":scope > sign")?.textContent?.trim() === "G");
+  generic.forEach((p) => {
+    const declared = list?.querySelector(`:scope > score-part[id="${idOf(p)}"]`);
+    // partie vidée (elle ne portait que la flûte) : retirée, ce n'est pas un accompagnement
+    if (p.getElementsByTagName("pitch").length === 0) {
+      p.remove();
+      declared?.remove();
+      return;
+    }
+    const name = declared?.querySelector(":scope > part-name");
+    if (name) name.textContent = isFluteLike(p, noPiano) ? `Flûte ${++flutes}` : `Piano (${++pianoCount})`;
   });
-  root.insertBefore(flute, parts[0]);
+  const firstPart = root.querySelector(":scope > part"); // la première a pu être retirée (vide)
+  if (firstPart) root.insertBefore(flute, firstPart);
+  else root.appendChild(flute);
   return true;
 }
 
