@@ -110,7 +110,64 @@ describe("transcription d'un enregistrement", () => {
     expect(prepareImport(t.xml, "Valse.musicxml").entry.kind ?? "flute").toBe("flute");
   });
 
+  it("flûte + piano : la mélodie de la flûte est extraite, l'accompagnement écarté", () => {
+    const flute = play([[79, 1], [81, 1], [83, 1], [84, 1], [86, 2], [84, 2], [83, 1], [81, 1], [79, 2]], 90);
+    const beat = 60 / 90;
+    const acc: HeardNote[] = [];
+    for (let b = 0; b < 12; b += 2) {
+      // accords de la main droite (dans la tessiture de la flûte !) et basses
+      for (const m of [64, 67, 72]) acc.push({ start: 0.4 + b * beat, duration: 2 * beat * 0.9, midi: m, amplitude: 0.55 });
+      acc.push({ start: 0.4 + b * beat, duration: 2 * beat * 0.9, midi: 48, amplitude: 0.7 });
+    }
+    const line = cleanNotes([...flute, ...acc], "flute").map((n) => n.midi);
+    expect(line).toEqual([79, 81, 83, 84, 86, 84, 83, 81, 79]);
+    const t = transcribe([...flute, ...acc], { instrument: "flute", title: "Duo", beats: 4, beatType: 4, grid: 1 });
+    expect(t.notes).toBe(9);
+    expect(t.measures).toBe(3);
+  });
+
+  it("levée (anacrouse) : le premier temps est trouvé grâce à l'accompagnement", () => {
+    // une noire de levée, puis 2 mesures ; basses fortes sur les premiers temps
+    const flute = play([[72, 1], [77, 2], [81, 2], [79, 2], [77, 2]], 100);
+    const beat = 60 / 100;
+    const bass: HeardNote[] = [1, 5].map((b) => ({ start: 0.4 + b * beat, duration: 3.6 * beat, midi: 41, amplitude: 0.9 }));
+    const t = transcribe([...flute, ...bass], { instrument: "flute", title: "Levée", beats: 4, beatType: 4, grid: 1 });
+    expect(t.pickupBeats).toBe(1);
+    expect(t.xml).toContain('<measure number="0" implicit="yes">');
+    expect(t.measures).toBe(2);
+  });
+
+  it("triolets : un temps joué en trois est écrit en triolet", () => {
+    const heard = play([[72, 1], [74, 1 / 3], [76, 1 / 3], [77, 1 / 3], [79, 1], [77, 1], [76, 4]], 80, 0.005);
+    const t = transcribe(heard, { instrument: "flute", title: "Triolet", beats: 4, beatType: 4, grid: 1 });
+    expect((t.xml.match(/<actual-notes>3<\/actual-notes>/g) ?? []).length).toBe(3);
+    expect(t.xml).toContain('<tuplet type="start" bracket="yes"/>');
+    expect(t.measures).toBe(2);
+    const { xml } = prepareImport(t.xml, "Triolet.musicxml");
+    expect(melodyNotes(xml)).toHaveLength(7);
+  });
+
   it("aucune note : message clair", () => {
     expect(() => transcribe([], { instrument: "flute", title: "x", beats: 4, beatType: 4, grid: 1 })).toThrow(/Aucune note/);
+  });
+});
+
+describe("notes répétées rapides", () => {
+  it("creux de volume mesuré : coup de langue = deux notes, note tenue coupée = une seule", () => {
+    const two = (dip: number): HeardNote[] => [
+      { start: 2.927, duration: 0.975, midi: 83, amplitude: 0.87 },
+      { start: 3.902, duration: 0.152, midi: 83, amplitude: 0.74, dip },
+    ];
+    expect(cleanNotes(two(0.95), "flute")).toHaveLength(1); // pas de creux : note tenue coupée
+    expect(cleanNotes(two(0.2), "flute")).toHaveLength(2); // creux : coup de langue
+  });
+
+  it("pointée-double sur la même note : deux notes, pas une", () => {
+    const heard: HeardNote[] = [
+      { start: 0.522, duration: 0.453, midi: 79, amplitude: 0.84 },
+      { start: 0.975, duration: 0.151, midi: 79, amplitude: 0.72 },
+      { start: 1.115, duration: 0.604, midi: 81, amplitude: 0.77 },
+    ];
+    expect(cleanNotes(heard, "flute")).toHaveLength(3);
   });
 });
