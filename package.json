@@ -1,7 +1,7 @@
 {
   "name": "flute-partitions",
   "private": true,
-  "version": "0.6.6",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@spotify/basic-pitch": "1.0.1",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-process": "2.4.0",
     "@tauri-apps/plugin-updater": "2.14.1",

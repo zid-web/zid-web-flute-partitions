@@ -1923,3 +1923,24 @@ button.link {
 .import-pill-bar { order: 5; flex: 1 0 100%; height: 5px; border-radius: 999px; background: rgba(99, 102, 241, 0.15); overflow: hidden; }
 .import-pill-bar span { display: block; height: 100%; background: var(--primary); transition: width 0.3s; }
 .import-dismiss { margin-top: 0.3rem; }
+
+/* Transcrire un enregistrement */
+.transcribe { max-width: 900px; margin: 0 auto; padding: 0 16px 48px; }
+.transcribe-step, .transcribe-result { margin-top: 1rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.9rem 1.1rem; box-shadow: var(--shadow-sm); }
+.transcribe h2 { font-size: 1.05rem; margin: 0 0 0.7rem; display: inline; }
+.transcribe-step summary { cursor: pointer; margin-bottom: 0.6rem; }
+.transcribe-step > h2 { display: block; }
+.transcribe-choices { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.5rem; }
+.transcribe .choice.active { border-color: var(--primary); background: var(--primary); color: var(--primary-ink); }
+.transcribe .record.active { background: var(--bad); color: #fff; border-color: var(--bad); }
+.transcribe-tip { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
+.transcribe-settings { display: flex; flex-wrap: wrap; gap: 0.8rem 1.4rem; align-items: center; }
+.transcribe-settings label { display: flex; align-items: center; gap: 0.4rem; }
+.transcribe-settings input[type="number"] { width: 4.5rem; }
+.transcribe-result h2 { display: block; }
+.transcribe-audio { width: 100%; margin: 0.4rem 0; }
+.transcribe-title { display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0; }
+.transcribe-title input { flex: 1; min-width: 0; }
+.transcribe .import-progress { margin-top: 1rem; }
+.transcribe-credit { color: var(--muted); font-size: 0.78rem; text-align: center; margin-top: 1.5rem; }
