@@ -70,7 +70,9 @@ export function extractMelody(candidates: HeardNote[]): HeardNote[] {
   const c = [...candidates].sort((a, b) => a.start - b.start || b.amplitude - a.amplitude);
   const n = c.length;
   if (n === 0) return [];
-  const value = (x: HeardNote) => x.duration * (0.3 + x.amplitude) * Math.max(0.3, 1 + 0.025 * (x.midi - 72));
+  // valeur d'une seconde de note
+  const rate = (x: HeardNote) => (0.3 + x.amplitude) * Math.max(0.3, 1 + 0.025 * (x.midi - 72));
+  const value = (x: HeardNote) => x.duration * rate(x);
   const jumpCost = (a: HeardNote, b: HeardNote) => 0.015 * Math.max(0, Math.abs(a.midi - b.midi) - 4);
   const WINDOW = 4; // secondes
   const dp = new Float64Array(n);
@@ -91,9 +93,10 @@ export function extractMelody(candidates: HeardNote[]): HeardNote[] {
     let arg = farArg;
     for (let j = i - 1; j >= far; j--) {
       const y = c[j];
-      // une note avant celle-ci (un léger chevauchement est toléré : le son se prolonge)
-      if (y.start >= x.start - 0.03 || y.start + y.duration > x.start + Math.min(0.15, 0.5 * y.duration)) continue;
-      const v = dp[j] - jumpCost(y, x);
+      // une note avant celle-ci ; si elle dure encore (résonance, legato, réverbération : la
+      // flûte ne joue qu'une note à la fois), elle s'arrête là et perd la valeur de sa fin
+      if (y.start >= x.start - 0.03) continue;
+      const v = dp[j] - rate(y) * Math.max(0, y.start + y.duration - x.start) - jumpCost(y, x);
       if (v > best) {
         best = v;
         arg = j;
@@ -174,18 +177,43 @@ function onsetEnvelope(notes: HeardNote[], length: number): Float64Array {
   return env;
 }
 
+const BPM_MIN = 40;
+const BPM_MAX = 200;
+const BPM_STEP = 0.5;
+const BPM_COUNT = Math.round((BPM_MAX - BPM_MIN) / BPM_STEP) + 1;
+const bpmAt = (i: number) => BPM_MIN + i * BPM_STEP;
+
+/** Écarts entre attaques successives (secondes), notes simultanées réunies. */
+function interOnsets(notes: HeardNote[]): { at: number; d: number }[] {
+  // attaques nettes seulement (le volume monte) : les fragments faibles ou brefs, sans attaque
+  // (résonance, harmoniques, note tenue coupée par l'écoute) brouillent la pulsation
+  const amps = notes.map((n) => n.amplitude).sort((a, b) => a - b);
+  const floor = 0.5 * (amps[amps.length >> 1] ?? 0);
+  const starts = notes
+    .filter((n) => n.amplitude >= floor && n.duration >= 0.1 && (n.dip === undefined || n.dip < 0.8))
+    .map((n) => n.start)
+    .sort((a, b) => a - b);
+  const out: { at: number; d: number }[] = [];
+  let last = -Infinity;
+  for (const t of starts) {
+    const d = t - last;
+    if (d <= 0.06) continue; // même attaque (accord, notes un peu décalées)
+    if (Number.isFinite(last)) out.push({ at: t, d });
+    last = t;
+  }
+  return out;
+}
+
 /**
- * Période de la pulsation (en images) d'après les écarts entre attaques : le bon tempo est celui
- * qui les explique par des valeurs simples (1, 2, 3 temps, demi-temps…), avec une préférence pour
- * un tempo modéré (♩ ≈ 100) quand plusieurs conviennent.
+ * Accord de chaque tempo (40 → 200, par demi-noire par minute) avec des écarts entre attaques :
+ * le bon tempo les explique par des valeurs simples (1, 2, 3 temps, demi-temps, tiers de temps
+ * pour les triolets), avec une préférence pour un tempo modéré (♩ ≈ 100) quand plusieurs conviennent.
  */
-function pulsePeriod(notes: HeardNote[]): number {
-  const starts = notes.map((n) => n.start).sort((a, b) => a - b);
-  const iois = starts.slice(1).map((t, i) => t - starts[i]).filter((d) => d > 0.08);
-  if (iois.length === 0) return (60 / 100) * ENV_RATE;
-  let best = 100;
-  let bestScore = -Infinity;
-  for (let bpm = 40; bpm <= 200; bpm += 0.5) {
+function tempoFit(iois: number[]): Float64Array {
+  const fitOf = new Float64Array(BPM_COUNT);
+  if (iois.length === 0) return fitOf;
+  for (let b = 0; b < BPM_COUNT; b++) {
+    const bpm = bpmAt(b);
     const beat = 60 / bpm;
     let fit = 0;
     for (const d of iois) {
@@ -202,28 +230,142 @@ function pulsePeriod(notes: HeardNote[]): number {
       fit += Math.max(binary, ternary);
     }
     const prior = Math.exp(-0.5 * (Math.log2(bpm / 100) / 0.9) ** 2);
-    const score = (fit / iois.length) * prior;
-    if (score > bestScore) {
-      bestScore = score;
-      best = bpm;
-    }
+    fitOf[b] = (fit / iois.length) * prior;
   }
+  return fitOf;
+}
+
+/** Période de la pulsation (en images) sur tout l'enregistrement. */
+function pulsePeriod(notes: HeardNote[]): number {
+  const fit = tempoFit(interOnsets(notes).map((x) => x.d));
+  let best = bpmAt(Math.round((100 - BPM_MIN) / BPM_STEP));
+  let bestScore = 0;
+  fit.forEach((v, b) => {
+    if (v > bestScore) {
+      bestScore = v;
+      best = bpmAt(b);
+    }
+  });
   return (60 / best) * ENV_RATE;
 }
 
+const TEMPO_WINDOW = 8; // secondes d'écoute pour un tempo local
+const TEMPO_HOP = 1;
+
 /**
- * Instants des temps (secondes). `tempo` imposé (noires par minute) ou estimé. La pulsation peut
- * ralentir ou presser (programmation dynamique), mais reste proche de la période trouvée.
+ * Tempo local tout au long de l'enregistrement (noires par minute, une valeur par seconde) :
+ * un morceau change de tempo (Moderato, Allegro, Andante…) et l'interprète ralentit ou presse.
+ * Accord de chaque tempo sur une fenêtre glissante de 8 s, puis chemin le plus probable (Viterbi)
+ * qui évolue doucement, mais peut changer franchement entre deux sections ; le niveau de pulsation
+ * (noire, ou croche…) reste celui trouvé sur l'ensemble du morceau, sauf indice net.
+ */
+export function tempoCurve(notes: HeardNote[], end: number): number[] {
+  const iois = interOnsets(notes);
+  // attaques pesées par leur netteté (le volume monte) et leur force : les temps forts ressortent
+  const accent = new Float64Array(Math.ceil(end * ENV_RATE) + 8);
+  for (const n of notes) {
+    const w = n.amplitude * (n.dip === undefined ? 1 : Math.max(0, 1 - n.dip)) * Math.min(1, n.duration / 0.2);
+    const i = Math.round(n.start * ENV_RATE);
+    for (let k = -3; k <= 3; k++) if (i + k >= 0 && i + k < accent.length) accent[i + k] += w * Math.exp(-(k * k) / 4);
+  }
+  const frames = Math.max(1, Math.ceil(end / TEMPO_HOP));
+  const globalBpm = 60 / (pulsePeriod(notes) / ENV_RATE);
+  const obs: Float64Array[] = [];
+  let lo = 0;
+  for (let f = 0; f < frames; f++) {
+    const center = f * TEMPO_HOP;
+    const from = center - TEMPO_WINDOW / 2;
+    const to = center + TEMPO_WINDOW / 2;
+    while (lo < iois.length && iois[lo].at < from) lo++;
+    const local: number[] = [];
+    for (let i = lo; i < iois.length && iois[i].at < to; i++) local.push(iois[i].d);
+    const fit = tempoFit(local);
+    // régularité des attaques : autocorrélation de l'enveloppe à 1, 2 et 4 temps
+    const a0 = Math.max(0, Math.round(from * ENV_RATE));
+    const a1 = Math.min(accent.length, Math.round(to * ENV_RATE));
+    const ac = (lag: number) => {
+      let v = 0;
+      for (let t = a0; t + lag < a1; t++) v += accent[t] * accent[t + lag];
+      return v;
+    };
+    const zero = ac(0) || 1;
+    const lags = new Map<number, number>();
+    const acAt = (lag: number) => {
+      const l = Math.round(lag);
+      if (!lags.has(l)) lags.set(l, ac(l) / zero);
+      return lags.get(l)!;
+    };
+    for (let b = 0; b < BPM_COUNT; b++) {
+      const P = (60 / bpmAt(b)) * ENV_RATE;
+      fit[b] *= 0.2 + acAt(P) + 0.5 * acAt(2 * P) + 0.25 * acAt(4 * P);
+    }
+    let max = 0;
+    for (const v of fit) max = Math.max(max, v);
+    // log-vraisemblance normalisée ; sans notes : aucun avis ; tempo global légèrement favorisé
+    const o = new Float64Array(BPM_COUNT);
+    for (let b = 0; b < BPM_COUNT; b++) {
+      const g = Math.log2(bpmAt(b) / globalBpm);
+      o[b] = (local.length >= 3 && max > 0 ? 6 * Math.log((fit[b] + 0.02 * max) / max) : 0) - 0.3 * g * g;
+    }
+    obs.push(o);
+  }
+  // Viterbi : changement doux (± quelques %) presque gratuit, saut franc possible mais coûteux
+  const cost = (a: number, b: number) => {
+    const r = Math.abs(Math.log2(bpmAt(a) / bpmAt(b)));
+    return r < 0.04 ? 400 * r * r : 0.7 + 9 + 3 * r;
+  };
+  let score = Float64Array.from(obs[0]);
+  const back: Int32Array[] = [];
+  for (let f = 1; f < frames; f++) {
+    const next = new Float64Array(BPM_COUNT);
+    const arg = new Int32Array(BPM_COUNT);
+    // meilleur état précédent, pour un saut franc
+    let top = 0;
+    for (let b = 1; b < BPM_COUNT; b++) if (score[b] > score[top]) top = b;
+    for (let b = 0; b < BPM_COUNT; b++) {
+      let best = score[top] - cost(top, b);
+      let at = top;
+      const reach = 12; // ±6 noires par minute par seconde : changement doux
+      for (let a = Math.max(0, b - reach); a <= Math.min(BPM_COUNT - 1, b + reach); a++) {
+        const v = score[a] - cost(a, b);
+        if (v > best) {
+          best = v;
+          at = a;
+        }
+      }
+      next[b] = best + obs[f][b];
+      arg[b] = at;
+    }
+    back.push(arg);
+    score = next;
+  }
+  let state = 0;
+  for (let b = 1; b < BPM_COUNT; b++) if (score[b] > score[state]) state = b;
+  const path = new Array<number>(frames);
+  for (let f = frames - 1; f >= 0; f--) {
+    path[f] = bpmAt(state);
+    if (f > 0) state = back[f - 1][state];
+  }
+  return path;
+}
+
+/**
+ * Instants des temps (secondes). `tempo` imposé (noires par minute) ou suivi tout au long de
+ * l'enregistrement (`tempoCurve`) ; la pulsation peut ralentir ou presser (programmation
+ * dynamique), mais reste proche du tempo local.
  */
 export function trackBeats(notes: HeardNote[], tempo?: number): number[] {
   if (notes.length === 0) return [];
   const end = notes.reduce((m, n) => Math.max(m, n.start + n.duration), 0);
   const env = onsetEnvelope(notes, end);
-  const period = tempo ? (60 / tempo) * ENV_RATE : pulsePeriod(notes);
+  const curve = tempo ? null : tempoCurve(notes, end);
+  const periodAt = (t: number) =>
+    (60 / (tempo ?? curve![Math.min(curve!.length - 1, Math.max(0, Math.round(t / ENV_RATE / TEMPO_HOP)))])) * ENV_RATE;
   const tightness = tempo ? 400 : 100;
   const score = new Float64Array(env.length);
   const back = new Int32Array(env.length).fill(-1);
   for (let t = 0; t < env.length; t++) {
+    const period = periodAt(t);
     let best = 0;
     let arg = -1;
     const from = Math.max(0, Math.round(t - 2 * period));
@@ -240,7 +382,7 @@ export function trackBeats(notes: HeardNote[], tempo?: number): number[] {
   }
   // dernier temps : le meilleur score près de la fin
   let t = env.length - 1;
-  for (let i = Math.max(0, env.length - Math.round(period)); i < env.length; i++) if (score[i] > score[t]) t = i;
+  for (let i = Math.max(0, env.length - Math.round(periodAt(env.length - 1))); i < env.length; i++) if (score[i] > score[t]) t = i;
   const beats: number[] = [];
   while (t >= 0) {
     beats.push(t / ENV_RATE);
@@ -249,14 +391,14 @@ export function trackBeats(notes: HeardNote[], tempo?: number): number[] {
   beats.reverse();
   // le premier temps : sur la première note (pas de temps dans le silence d'avant)
   const first = notes.reduce((m, n) => Math.min(m, n.start), Infinity);
-  const P = period / ENV_RATE;
+  const P = periodAt(Math.round(first * ENV_RATE)) / ENV_RATE;
   const kept = beats.filter((b) => b > first - P / 3);
   beats.length = 0;
   for (const b of kept) beats.push(b);
   if (beats.length === 0 || beats[0] - first > P / 3) beats.unshift(first);
   else beats[0] = first;
   // assez de temps pour couvrir la fin
-  const step = beats.length > 1 ? beats[beats.length - 1] - beats[beats.length - 2] : period / ENV_RATE;
+  const step = beats.length > 1 ? beats[beats.length - 1] - beats[beats.length - 2] : P;
   while (beats[beats.length - 1] < end) beats.push(beats[beats.length - 1] + step);
   return beats;
 }
@@ -425,25 +567,152 @@ function snap(pos: number, g: Grid): number {
  */
 export function downbeatOffset(notes: HeardNote[], beats: number[], beatsPerMeasure: number): number {
   if (beatsPerMeasure <= 1 || beats.length < 2) return 0;
-  const score = new Array(beatsPerMeasure).fill(0);
+  return bestPhase(downbeatEvidence(notes, beats), 0, beats.length, beatsPerMeasure) ?? 0;
+}
+
+/**
+ * Indice de premier temps de chaque temps suivi : avec un accompagnement, les basses marquent le
+ * premier temps (« basse, accord, accord ») ; sinon (flûte seule), ce sont les notes longues.
+ */
+function downbeatEvidence(notes: HeardNote[], beats: number[]): Float64Array {
+  const score = new Float64Array(beats.length);
   // fin de chaque note, par hauteur : une note qui en prolonge une autre (même hauteur, sans
   // silence — basse tenue coupée en deux à l'arrivée d'un accord) n'est pas une attaque
   const ends = new Map<number, number[]>();
-  for (const n of notes) ends.set(n.midi, [...(ends.get(n.midi) ?? []), n.start + n.duration]);
-  const attacks = notes.filter((n) => !(ends.get(n.midi) ?? []).some((e) => Math.abs(e - n.start) < 0.03));
-  // avec un accompagnement, les basses marquent le premier temps (« basse, accord, accord ») ;
-  // sinon (flûte seule), ce sont les notes longues
+  for (const n of notes) {
+    const list = ends.get(n.midi);
+    if (list) list.push(n.start + n.duration);
+    else ends.set(n.midi, [n.start + n.duration]);
+  }
+  for (const list of ends.values()) list.sort((x, y) => x - y);
+  const continues = (n: HeardNote) => {
+    const list = ends.get(n.midi)!;
+    // recherche dichotomique d'une fin à moins de 30 ms de l'attaque
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid] < n.start - 0.03) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < list.length && list[lo] <= n.start + 0.03;
+  };
+  const attacks = notes.filter((n) => !continues(n));
   const bass = attacks.filter((n) => n.midi < 55);
   const useBass = bass.length >= 4;
   for (const n of useBass ? bass : attacks) {
     const pos = beatPosition(beats, n.start);
     const b = Math.round(pos);
-    if (Math.abs(pos - b) > 0.15 || b < 0) continue;
-    score[b % beatsPerMeasure] += useBass ? 0.3 + n.amplitude : (0.3 + n.amplitude) * Math.min(2, n.duration);
+    if (Math.abs(pos - b) > 0.15 || b < 0 || b >= beats.length) continue;
+    score[b] += useBass ? 0.3 + n.amplitude : (0.3 + n.amplitude) * Math.min(2, n.duration);
   }
+  return score;
+}
+
+/**
+ * Temps de la mesure où tombe le premier temps entre les temps `from` et `to` (indice modulo
+ * `beatsPerMeasure`) ; `null` si rien ne se détache nettement (0 l'emporte à égalité).
+ */
+function bestPhase(evidence: Float64Array, from: number, to: number, beatsPerMeasure: number): number | null {
+  const score = new Array(beatsPerMeasure).fill(0);
+  for (let i = from; i < to; i++) score[i % beatsPerMeasure] += evidence[i];
   let best = 0;
   for (let r = 1; r < beatsPerMeasure; r++) if (score[r] > score[best]) best = r;
+  if (score[best] <= 0) return null;
   return best !== 0 && score[best] > score[0] * 1.25 ? best : 0;
+}
+
+/**
+ * Changements de tempo francs (début d'une nouvelle section, ou fin d'un ralenti) : le suivi des
+ * temps peut y gagner ou perdre un temps, et toutes les barres de mesure suivantes seraient
+ * décalées. Chaque section retrouve son premier temps (basses, notes longues) ; les temps en
+ * trop (les plus vides, autour du changement) sont retirés, ou des temps manquants ajoutés.
+ */
+export function realignSections(notes: HeardNote[], beats: number[], beatsPerMeasure: number): number[] {
+  if (beatsPerMeasure <= 1 || beats.length < 16) return beats;
+  let out = beats.slice();
+  const gap = (i: number) => out[i + 1] - out[i];
+  const median = (xs: number[]) => xs.sort((x, y) => x - y)[xs.length >> 1];
+  // force des attaques autour de chaque temps (pour choisir les temps à retirer)
+  const onsetAt = (t: number) => {
+    let v = 0;
+    for (const n of notes) if (Math.abs(n.start - t) < 0.07) v += n.amplitude;
+    return v;
+  };
+  let phase: number | null = null;
+  let segStart = 0;
+  for (let guard = 0; guard < 64; guard++) {
+    // prochaine frontière : le tempo change de plus de 20 % entre les 4 temps d'avant et d'après
+    let boundary = -1;
+    for (let j = segStart + 8; j + 4 < out.length - 1; j++) {
+      const before = median([gap(j - 4), gap(j - 3), gap(j - 2), gap(j - 1)]);
+      const after = median([gap(j), gap(j + 1), gap(j + 2), gap(j + 3)]);
+      const r = after / before;
+      if (r > 1.2 || r < 1 / 1.2) {
+        boundary = j;
+        break;
+      }
+    }
+    const segEnd = boundary < 0 ? out.length : boundary;
+    const evidence = downbeatEvidence(notes, out);
+    const segPhase = bestPhase(evidence, segStart, segEnd, beatsPerMeasure);
+    if (phase === null) phase = segPhase ?? 0;
+    else if (segPhase !== null && segPhase !== phase) {
+      // décalage à rattraper avant cette section
+      const d = (segPhase - phase + beatsPerMeasure) % beatsPerMeasure;
+      const zoneFrom = Math.max(1, segStart - 4);
+      const zoneTo = Math.min(out.length - 2, segStart + 3);
+      if (d <= beatsPerMeasure / 2) {
+        // retirer d temps, un à un : celui dont le retrait laisse la pulsation la plus régulière
+        // (un temps ajouté au milieu d'un ralenti), et de préférence sans attaque forte
+        for (let k = 0; k < d; k++) {
+          let pick = -1;
+          let pickCost = Infinity;
+          const strongest = Math.max(1e-6, ...Array.from({ length: zoneTo - zoneFrom + 1 }, (_, j) => onsetAt(out[zoneFrom + j] ?? 0)));
+          for (let i = Math.max(2, zoneFrom); i <= Math.min(out.length - 3, zoneTo); i++) {
+            const merged = out[i + 1] - out[i - 1];
+            const around = (out[i - 1] - out[i - 2] + out[i + 2] - out[i + 1]) / 2;
+            const cost = Math.abs(Math.log(merged / around)) + 0.3 * (onsetAt(out[i]) / strongest);
+            if (cost < pickCost) {
+              pickCost = cost;
+              pick = i;
+            }
+          }
+          if (pick < 0) break;
+          out.splice(pick, 1);
+          if (pick < segStart) segStart--;
+        }
+      } else {
+        // ajouter des temps : au milieu des plus grands écarts de la zone
+        const add = beatsPerMeasure - d;
+        const candidates: number[] = [];
+        for (let i = zoneFrom; i < zoneTo; i++) candidates.push(i);
+        const split = new Set(candidates.sort((x, y) => gap(y) - gap(x)).slice(0, add));
+        const next: number[] = [];
+        out.forEach((b, i) => {
+          next.push(b);
+          if (split.has(i)) next.push((b + out[i + 1]) / 2);
+        });
+        segStart += [...split].filter((i) => i < segStart).length;
+        out = next;
+      }
+    }
+    if (boundary < 0) break;
+    // la frontière, recalculée après correction
+    let nextStart = -1;
+    for (let j = Math.max(segStart + 8, 8); j + 4 < out.length - 1; j++) {
+      const before = median([gap(j - 4), gap(j - 3), gap(j - 2), gap(j - 1)]);
+      const after = median([gap(j), gap(j + 1), gap(j + 2), gap(j + 3)]);
+      const r = after / before;
+      if (r > 1.2 || r < 1 / 1.2) {
+        nextStart = j;
+        break;
+      }
+    }
+    if (nextStart < 0) break;
+    segStart = nextStart;
+  }
+  return out;
 }
 
 /** Place les notes sur la grille (unités), une même hauteur sans chevauchement. */
@@ -597,6 +866,34 @@ function staffXml(notes: Placed[], measures: [number, number][], g: Grid, fifths
   return out;
 }
 
+/**
+ * Tempo écrit de chaque mesure (noires par minute) : celui de la section en cours ; un nouveau
+ * tempo est écrit quand le jeu change franchement (plus de 10 %) pendant au moins deux mesures
+ * (nouvelle section, ralenti de fin). Le rubato ordinaire ne change pas le tempo écrit.
+ */
+function measureTempos(beats: number[], measures: [number, number][], beatTicks: number, overall: number, fixed: boolean): number[] {
+  if (fixed) return measures.map(() => overall);
+  const toQuarter = beatTicks / DIVISIONS;
+  const local = measures.map(([a, b]) => {
+    const from = Math.max(0, Math.floor(a / beatTicks));
+    const to = Math.min(beats.length - 1, Math.ceil(b / beatTicks));
+    const gaps: number[] = [];
+    for (let i = from; i < to; i++) gaps.push(beats[i + 1] - beats[i]);
+    if (gaps.length === 0) return overall;
+    gaps.sort((x, y) => x - y);
+    return Math.round((60 / gaps[gaps.length >> 1]) * toQuarter);
+  });
+  const out: number[] = [];
+  let current = local[0] ?? overall;
+  local.forEach((t, m) => {
+    const far = (x: number) => Math.abs(Math.log(x / current)) > Math.log(1.1);
+    const lasting = m + 1 >= local.length || far(local[m + 1]);
+    if (m > 0 && far(t) && lasting) current = m + 1 < local.length ? Math.round((t + local[m + 1]) / 2) : t;
+    out.push(current);
+  });
+  return out;
+}
+
 export function transcribe(heard: HeardNote[], options: TranscribeOptions): Transcription {
   const ins = INSTRUMENTS[options.instrument];
   const notes = cleanNotes(heard, options.instrument);
@@ -608,7 +905,10 @@ export function transcribe(heard: HeardNote[], options: TranscribeOptions): Tran
   // temps suivis : noires (x/4), noires pointées (6/8, 9/8, 12/8), blanches (2/2)
   const beatTicks = compound ? 18 : (DIVISIONS * 4) / options.beatType;
   const trackedTempo = options.tempo ? options.tempo / (beatTicks / DIVISIONS) : undefined;
-  const beats = trackBeats(rhythmNotes, trackedTempo);
+  const beatsPerMeasureEarly = compound ? options.beats / 3 : options.beats;
+  // une barre de mesure par section, même si un ralenti ou un changement de tempo a fait gagner
+  // ou perdre un temps
+  const beats = realignSections(rhythmNotes, trackBeats(rhythmNotes, trackedTempo), beatsPerMeasureEarly);
   const step = (beatTicks === 18 ? 3 : beatTicks / 4) * options.grid;
   const positions = notes.map((n) => beatPosition(beats, n.start));
   const g: Grid = { beatTicks, step: Math.max(3, step), triplet: options.triplets === false ? new Set() : findTriplets(positions, beatTicks, Math.max(3, step)) };
@@ -624,6 +924,8 @@ export function transcribe(heard: HeardNote[], options: TranscribeOptions): Tran
   for (let a = offset; a < last; a += measureTicks) measures.push([a, a + measureTicks]);
   const { fifths, mode } = estimateKey(all.length ? all : notes);
   const tempo = Math.round(tempoOf(beats) * (beatTicks / DIVISIONS));
+  // tempo de chaque mesure (noires par minute) : Écouter suit les sections du morceau
+  const tempos = measureTempos(beats, measures, beatTicks, tempo, options.tempo !== undefined);
 
   const piano = options.instrument === "piano";
   const staves = piano
@@ -637,9 +939,13 @@ export function transcribe(heard: HeardNote[], options: TranscribeOptions): Tran
       m === 0
         ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${fifths}</fifths><mode>${mode}</mode></key><time><beats>${options.beats}</beats><beat-type>${options.beatType}</beat-type></time>${
             piano ? `<staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef>` : `<clef><sign>G</sign><line>2</line></clef>`
-          }</attributes><direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempo}</per-minute></metronome></direction-type><sound tempo="${tempo}"/></direction>`
+          }</attributes><direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempos[0]}</per-minute></metronome></direction-type><sound tempo="${tempos[0]}"/></direction>`
         : "";
-    const content = piano ? `${staves[0][m]}<backup><duration>${b - a}</duration></backup>${staves[1][m]}` : staves[0][m];
+    const change =
+      m > 0 && tempos[m] !== tempos[m - 1]
+        ? `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempos[m]}</per-minute></metronome></direction-type><sound tempo="${tempos[m]}"/></direction>`
+        : "";
+    const content = change + (piano ? `${staves[0][m]}<backup><duration>${b - a}</duration></backup>${staves[1][m]}` : staves[0][m]);
     // levée : mesure incomplète, non comptée
     const number = offset > 0 ? m : m + 1;
     return `<measure number="${number}"${offset > 0 && m === 0 ? ' implicit="yes"' : ""}>${attrs}${content}</measure>`;

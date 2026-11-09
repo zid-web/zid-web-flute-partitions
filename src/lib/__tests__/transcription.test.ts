@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { cleanNotes, estimateKey, trackBeats, tempoOf, transcribe, type HeardNote } from "../transcription";
+import { cleanNotes, estimateKey, extractMelody, realignSections, tempoCurve, trackBeats, tempoOf, transcribe, type HeardNote } from "../transcription";
 import { prepareImport } from "../import";
 import { melodyNotes } from "../accompaniment";
 
@@ -169,5 +169,62 @@ describe("notes répétées rapides", () => {
       { start: 1.115, duration: 0.604, midi: 81, amplitude: 0.77 },
     ];
     expect(cleanNotes(heard, "flute")).toHaveLength(3);
+  });
+});
+
+/**
+ * Flûte et piano en deux sections (♩ = 96 puis ♩ = 140), ralenti à la fin de la première :
+ * basse au 1er et 3e temps, accord aux 2e et 4e, mélodie en noires et croches.
+ */
+function twoSections(): { heard: HeardNote[]; downbeats: number[] } {
+  const heard: HeardNote[] = [];
+  const downbeats: number[] = [];
+  let t = 0.5;
+  const melody = [72, 74, 76, 77, 79, 77, 76, 74];
+  for (let m = 0; m < 16; m++) {
+    const bpm = m < 8 ? 96 : 140;
+    for (let b = 0; b < 4; b++) {
+      // ralenti sur la dernière mesure de la première section
+      const beat = (60 / bpm) * (m === 7 ? 1 + 0.12 * (b + 1) : 1);
+      if (b === 0) downbeats.push(t);
+      if (b % 2 === 0) heard.push({ start: t, duration: beat * 1.8, midi: b === 0 ? 38 : 43, amplitude: b === 0 ? 0.8 : 0.55, dip: 0.1 });
+      else for (const c of [59, 62, 67]) heard.push({ start: t + 0.005, duration: beat * 0.8, midi: c, amplitude: 0.4, dip: 0.3 });
+      const halves = m % 2 === 0 ? 1 : 2;
+      for (let h = 0; h < halves; h++) {
+        heard.push({ start: t + (h * beat) / 2, duration: (beat / halves) * 0.9, midi: melody[(m * 4 + b + h) % 8] + 12, amplitude: 0.8, dip: 0.2 });
+      }
+      t += beat;
+    }
+  }
+  return { heard, downbeats };
+}
+
+describe("morceau en plusieurs sections", () => {
+  it("le tempo est suivi section par section", () => {
+    const { heard } = twoSections();
+    const curve = tempoCurve(heard, 40);
+    expect(Math.abs(curve[8] - 96)).toBeLessThanOrEqual(5);
+    expect(Math.abs(curve[24] - 140)).toBeLessThanOrEqual(7);
+  });
+
+  it("les barres de mesure restent justes après le ralenti, et le nouveau tempo est écrit", () => {
+    const { heard, downbeats } = twoSections();
+    const beats = realignSections(heard, trackBeats(heard), 4);
+    // chaque premier temps de la vraie partition tombe sur un temps multiple de 4
+    for (const d of downbeats) {
+      const i = beats.findIndex((b) => Math.abs(b - d) < 0.08);
+      expect(i % 4).toBe(0);
+    }
+    const t = transcribe(heard, { instrument: "flute", title: "Sections", beats: 4, beatType: 4, grid: 1 });
+    const tempos = (t.xml.match(/sound tempo="(\d+)"/g) ?? []).map((x) => Number(x.match(/\d+/)![0]));
+    expect(Math.abs(tempos[0] - 96)).toBeLessThanOrEqual(5);
+    expect(tempos.some((x) => Math.abs(x - 140) <= 7)).toBe(true);
+    expect(t.measures).toBe(16);
+  });
+
+  it("trait rapide : chaque note est gardée même si la précédente résonne encore", () => {
+    // doubles croches à ♩ = 138 (0,11 s), chaque note entendue 0,3 s (résonance)
+    const run: HeardNote[] = [76, 78, 79, 81, 83, 84, 86, 88].map((midi, i) => ({ start: 1 + i * 0.109, duration: 0.3, midi, amplitude: 0.7 }));
+    expect(extractMelody(run).map((n) => n.midi)).toEqual([76, 78, 79, 81, 83, 84, 86, 88]);
   });
 });
