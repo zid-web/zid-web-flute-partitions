@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { cleanNotes, estimateKey, extractMelody, realignSections, tempoCurve, trackBeats, tempoOf, transcribe, type HeardNote } from "../transcription";
+import { cleanNotes, detectMeter, estimateKey, extractMelody, realignSections, tempoCurve, trackBeats, tempoOf, transcribe, type HeardNote } from "../transcription";
 import { prepareImport } from "../import";
 import { melodyNotes } from "../accompaniment";
 
@@ -216,9 +216,15 @@ describe("morceau en plusieurs sections", () => {
       expect(i % 4).toBe(0);
     }
     const t = transcribe(heard, { instrument: "flute", title: "Sections", beats: 4, beatType: 4, grid: 1 });
-    const tempos = (t.xml.match(/sound tempo="(\d+)"/g) ?? []).map((x) => Number(x.match(/\d+/)![0]));
-    expect(Math.abs(tempos[0] - 96)).toBeLessThanOrEqual(5);
-    expect(tempos.some((x) => Math.abs(x - 140) <= 7)).toBe(true);
+    // indications visibles : une par section
+    const shown = (t.xml.match(/<per-minute>(\d+)<\/per-minute>/g) ?? []).map((x) => Number(x.match(/\d+/)![0]));
+    expect(Math.abs(shown[0] - 96)).toBeLessThanOrEqual(5);
+    expect(shown.some((x) => Math.abs(x - 140) <= 7)).toBe(true);
+    // tempo joué, mesure par mesure (invisible) : le ralenti de la 8e mesure est reproduit
+    const played = Array.from(new DOMParser().parseFromString(t.xml, "application/xml").getElementsByTagName("measure")).map((m) =>
+      Number(Array.from(m.children).find((c) => c.localName === "sound")?.getAttribute("tempo") ?? NaN),
+    );
+    expect(played[7]).toBeLessThan(85);
     expect(t.measures).toBe(16);
   });
 
@@ -226,5 +232,60 @@ describe("morceau en plusieurs sections", () => {
     // doubles croches à ♩ = 138 (0,11 s), chaque note entendue 0,3 s (résonance)
     const run: HeardNote[] = [76, 78, 79, 81, 83, 84, 86, 88].map((midi, i) => ({ start: 1 + i * 0.109, duration: 0.3, midi, amplitude: 0.7 }));
     expect(extractMelody(run).map((n) => n.midi)).toEqual([76, 78, 79, 81, 83, 84, 86, 88]);
+  });
+});
+
+describe("mesure trouvée automatiquement", () => {
+  /** Mélodie sur une pulsation régulière, avec une basse au premier temps de chaque mesure. */
+  function piece(beatsPerBar: number, division: number[], bpm = 90): HeardNote[] {
+    const beat = 60 / bpm;
+    const out: HeardNote[] = [];
+    let t = 0.5;
+    for (let m = 0; m < 12; m++) {
+      for (let b = 0; b < beatsPerBar; b++) {
+        if (b === 0) out.push({ start: t, duration: beat * beatsPerBar * 0.9, midi: 40, amplitude: 0.8, dip: 0.1 });
+        else out.push({ start: t, duration: beat * 0.8, midi: 55, amplitude: 0.35, dip: 0.3 });
+        let pos = 0;
+        division.forEach((d, k) => {
+          out.push({ start: t + pos * beat, duration: d * beat * 0.9, midi: 72 + ((m + b + k) % 5), amplitude: 0.75, dip: 0.2 });
+          pos += d;
+        });
+        t += beat;
+      }
+    }
+    return out;
+  }
+  it("4/4 (croches), 3/4, 6/8 (trois croches par temps)", () => {
+    expect(detectMeter(piece(4, [0.5, 0.5]), "flute")).toEqual({ beats: 4, beatType: 4 });
+    expect(detectMeter(piece(3, [1]), "flute")).toEqual({ beats: 3, beatType: 4 });
+    expect(detectMeter(piece(2, [1 / 3, 1 / 3, 1 / 3], 70), "flute")).toEqual({ beats: 6, beatType: 8 });
+  });
+});
+
+describe("flûte + piano : l'accompagnement est écrit aussi", () => {
+  it("partie de piano sur deux portées, sans la mélodie, reconnue comme accompagnement à l'import", () => {
+    const { heard } = twoSections();
+    const t = transcribe(heard, { instrument: "flute", title: "Duo", beats: 4, beatType: 4, grid: 1, accompaniment: true });
+    const doc = new DOMParser().parseFromString(t.xml, "application/xml");
+    const parts = Array.from(doc.getElementsByTagName("part"));
+    expect(parts).toHaveLength(2);
+    expect(parts[1].getElementsByTagName("staves")[0]?.textContent).toBe("2");
+    expect(t.accompanimentNotes).toBeGreaterThan(30);
+    // basses (Ré2, Sol2) à la main gauche ; aucune note de la mélodie (Do5 et plus) au piano
+    const pianoOctaves = Array.from(parts[1].getElementsByTagName("octave")).map((o) => Number(o.textContent));
+    expect(pianoOctaves).toContain(2);
+    expect(pianoOctaves.every((o) => o <= 4)).toBe(true);
+    // même nombre de mesures dans les deux parties
+    expect(parts[1].getElementsByTagName("measure").length).toBe(parts[0].getElementsByTagName("measure").length);
+    const imported = prepareImport(t.xml, "Duo.musicxml");
+    expect(imported.entry.kind).toBe("flute-piano");
+    expect(imported.accompaniment).toBeTruthy();
+  });
+
+  it("sans l'option : la flûte seule", () => {
+    const { heard } = twoSections();
+    const t = transcribe(heard, { instrument: "flute", title: "Seule", beats: 4, beatType: 4, grid: 1 });
+    expect(t.accompanimentNotes).toBe(0);
+    expect(t.xml.match(/<part /g)).toHaveLength(1);
   });
 });
