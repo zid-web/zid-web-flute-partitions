@@ -261,3 +261,31 @@ describe("mesure trouvée automatiquement", () => {
     expect(detectMeter(piece(2, [1 / 3, 1 / 3, 1 / 3], 70), "flute")).toEqual({ beats: 6, beatType: 8 });
   });
 });
+
+describe("flûte + piano : l'accompagnement est écrit aussi", () => {
+  it("partie de piano sur deux portées, sans la mélodie, reconnue comme accompagnement à l'import", () => {
+    const { heard } = twoSections();
+    const t = transcribe(heard, { instrument: "flute", title: "Duo", beats: 4, beatType: 4, grid: 1, accompaniment: true });
+    const doc = new DOMParser().parseFromString(t.xml, "application/xml");
+    const parts = Array.from(doc.getElementsByTagName("part"));
+    expect(parts).toHaveLength(2);
+    expect(parts[1].getElementsByTagName("staves")[0]?.textContent).toBe("2");
+    expect(t.accompanimentNotes).toBeGreaterThan(30);
+    // basses (Ré2, Sol2) à la main gauche ; aucune note de la mélodie (Do5 et plus) au piano
+    const pianoOctaves = Array.from(parts[1].getElementsByTagName("octave")).map((o) => Number(o.textContent));
+    expect(pianoOctaves).toContain(2);
+    expect(pianoOctaves.every((o) => o <= 4)).toBe(true);
+    // même nombre de mesures dans les deux parties
+    expect(parts[1].getElementsByTagName("measure").length).toBe(parts[0].getElementsByTagName("measure").length);
+    const imported = prepareImport(t.xml, "Duo.musicxml");
+    expect(imported.entry.kind).toBe("flute-piano");
+    expect(imported.accompaniment).toBeTruthy();
+  });
+
+  it("sans l'option : la flûte seule", () => {
+    const { heard } = twoSections();
+    const t = transcribe(heard, { instrument: "flute", title: "Seule", beats: 4, beatType: 4, grid: 1 });
+    expect(t.accompanimentNotes).toBe(0);
+    expect(t.xml.match(/<part /g)).toHaveLength(1);
+  });
+});

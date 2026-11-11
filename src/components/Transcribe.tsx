@@ -42,6 +42,8 @@ export function Transcribe({ onBack, onOpen }: Props) {
   const [autoTempo, setAutoTempo] = useState(true);
   const [tempo, setTempo] = useState(90);
   const [grid, setGrid] = useState<1 | 2>(1);
+  // flûte ou violon : l'accompagnement entendu (piano) est écrit aussi
+  const [withAccompaniment, setWithAccompaniment] = useState(true);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [source, setSource] = useState<{ name: string; url: string; seconds: number } | null>(null);
   const [heard, setHeard] = useState<{ notes: HeardNote[]; instrument: TranscribeInstrument } | null>(null);
@@ -70,7 +72,7 @@ export function Transcribe({ onBack, onOpen }: Props) {
 
   const options = (name: string, found: [number, number]) => {
     const [beats, beatType] = meter === AUTO ? found : METERS[meter];
-    return { instrument, title: name, tempo: autoTempo ? undefined : tempo, beats, beatType, grid };
+    return { instrument, title: name, tempo: autoTempo ? undefined : tempo, beats, beatType, grid, accompaniment: instrument !== "piano" && withAccompaniment };
   };
 
   /** Réécrit la partition à partir des notes déjà entendues (réglages changés), sans réécouter. */
@@ -163,7 +165,7 @@ export function Transcribe({ onBack, onOpen }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrument]);
   // réglages changés après l'écoute : on réécrit aussitôt (même instrument)
-  const settingsKey = `${meter}|${autoTempo ? "auto" : tempo}|${grid}`;
+  const settingsKey = `${meter}|${autoTempo ? "auto" : tempo}|${grid}|${withAccompaniment}`;
   const lastKey = useRef(settingsKey);
   useEffect(() => {
     if (lastKey.current === settingsKey) return;
@@ -256,6 +258,12 @@ export function Transcribe({ onBack, onOpen }: Props) {
               <input type="number" min={30} max={240} value={tempo} onChange={(e) => setTempo(Math.max(30, Math.min(240, Number(e.target.value) || 90)))} />
             </label>
           )}
+          {instrument !== "piano" && (
+            <label className="toggle">
+              <input type="checkbox" checked={withAccompaniment} onChange={(e) => setWithAccompaniment(e.target.checked)} />
+              Écrire aussi l'accompagnement (piano)
+            </label>
+          )}
           <label>
             Plus petite valeur
             <select value={grid} onChange={(e) => setGrid(Number(e.target.value) as 1 | 2)}>
@@ -285,7 +293,8 @@ export function Transcribe({ onBack, onOpen }: Props) {
         <section className="transcribe-result">
           <h2>✅ Partition prête</h2>
           <p>
-            {result.notes} notes · {result.measures} mesure{result.measures > 1 ? "s" : ""} en {shownMeter[0]}/{shownMeter[1]} ·{" "}
+            {result.notes} notes{result.accompanimentNotes > 0 ? ` + ${result.accompanimentNotes} au piano` : ""} ·{" "}
+            {`${result.measures} mesure${result.measures > 1 ? "s" : ""} en ${shownMeter[0]}/${shownMeter[1]}`} ·{" "}
             {compoundMeter ? `♩. = ${Math.round(result.tempo / 1.5)}` : `♩ = ${result.tempo}`} ·{" "}
             {KEY_NAMES[`${result.fifths}${result.mode}`] ?? "tonalité estimée"}
           </p>
