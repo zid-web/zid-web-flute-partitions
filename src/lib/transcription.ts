@@ -263,10 +263,18 @@ export function tempoCurve(notes: HeardNote[], end: number): number[] {
   const iois = interOnsets(notes);
   // attaques pesées par leur netteté (le volume monte) et leur force : les temps forts ressortent
   const accent = new Float64Array(Math.ceil(end * ENV_RATE) + 8);
+  // l'accompagnement (basses, accords : sous le Do 4) marque les vrais temps, la mélodie les divise
+  const low = new Float64Array(accent.length);
+  let lowCount = 0;
   for (const n of notes) {
     const w = n.amplitude * (n.dip === undefined ? 1 : Math.max(0, 1 - n.dip)) * Math.min(1, n.duration / 0.2);
     const i = Math.round(n.start * ENV_RATE);
-    for (let k = -3; k <= 3; k++) if (i + k >= 0 && i + k < accent.length) accent[i + k] += w * Math.exp(-(k * k) / 4);
+    for (let k = -3; k <= 3; k++) {
+      if (i + k < 0 || i + k >= accent.length) continue;
+      accent[i + k] += w * Math.exp(-(k * k) / 4);
+      if (n.midi < 60) low[i + k] += w * Math.exp(-(k * k) / 4);
+    }
+    if (n.midi < 60) lowCount++;
   }
   const frames = Math.max(1, Math.ceil(end / TEMPO_HOP));
   const globalBpm = 60 / (pulsePeriod(notes) / ENV_RATE);
@@ -283,21 +291,28 @@ export function tempoCurve(notes: HeardNote[], end: number): number[] {
     // régularité des attaques : autocorrélation de l'enveloppe à 1, 2 et 4 temps
     const a0 = Math.max(0, Math.round(from * ENV_RATE));
     const a1 = Math.min(accent.length, Math.round(to * ENV_RATE));
-    const ac = (lag: number) => {
-      let v = 0;
-      for (let t = a0; t + lag < a1; t++) v += accent[t] * accent[t + lag];
-      return v;
+    const correlator = (env: Float64Array) => {
+      const ac = (lag: number) => {
+        let v = 0;
+        for (let t = a0; t + lag < a1; t++) v += env[t] * env[t + lag];
+        return v;
+      };
+      const zero = ac(0);
+      const lags = new Map<number, number>();
+      return (lag: number) => {
+        if (!zero) return 0;
+        const l = Math.round(lag);
+        if (!lags.has(l)) lags.set(l, ac(l) / zero);
+        return lags.get(l)!;
+      };
     };
-    const zero = ac(0) || 1;
-    const lags = new Map<number, number>();
-    const acAt = (lag: number) => {
-      const l = Math.round(lag);
-      if (!lags.has(l)) lags.set(l, ac(l) / zero);
-      return lags.get(l)!;
-    };
+    const acAt = correlator(accent);
+    const lowAt = lowCount >= 8 ? correlator(low) : null;
     for (let b = 0; b < BPM_COUNT; b++) {
       const P = (60 / bpmAt(b)) * ENV_RATE;
       fit[b] *= 0.2 + acAt(P) + 0.5 * acAt(2 * P) + 0.25 * acAt(4 * P);
+      // les attaques de l'accompagnement reviennent à chaque temps (pas à chaque demi-temps)
+      if (lowAt) fit[b] *= 0.3 + lowAt(P) + 0.5 * lowAt(2 * P);
     }
     let max = 0;
     for (const v of fit) max = Math.max(max, v);
@@ -894,6 +909,77 @@ function measureTempos(beats: number[], measures: [number, number][], beatTicks:
   return out;
 }
 
+/**
+ * Mesure la plus probable d'un enregistrement (choix « Auto ») :
+ * - temps divisé en deux (2/4, 3/4, 4/4) ou en trois croches (6/8, 9/8) : position des notes de
+ *   la mélodie dans le temps suivi (moitiés et quarts, ou tiers et sixièmes) ;
+ * - 2, 3 ou 4 temps par mesure : retour régulier des appuis (basses, notes longues).
+ * À défaut d'indice net : 4/4 (ou 6/8 si le temps est en trois).
+ */
+export function detectMeter(heard: HeardNote[], instrument: TranscribeInstrument): { beats: number; beatType: number } {
+  const notes = cleanNotes(heard, instrument);
+  const all = INSTRUMENTS[instrument].mono ? withoutOvertones(heard.filter((n) => n.duration >= MIN_DURATION && n.amplitude >= MIN_AMPLITUDE)) : notes;
+  const rhythm = all.length >= notes.length ? all : notes;
+  if (notes.length < 8) return { beats: 4, beatType: 4 };
+  const beats = trackBeats(rhythm);
+  // coût d'écriture de chaque note dans les deux façons de diviser le temps
+  let simple = 0;
+  let compound = 0;
+  const cost = (f: number, points: [number, number][]) => {
+    let best = Infinity;
+    for (const [p, c] of points) best = Math.min(best, c + 6 * Math.abs(f - p));
+    return best;
+  };
+  const SIMPLE: [number, number][] = [[0, 0], [0.5, 0], [1, 0], [0.25, 0.3], [0.75, 0.3], [1 / 3, 0.6], [2 / 3, 0.6]];
+  const COMPOUND: [number, number][] = [[0, 0], [1 / 3, 0], [2 / 3, 0], [1, 0], [1 / 6, 0.3], [0.5, 0.3], [5 / 6, 0.3], [0.25, 0.6], [0.75, 0.6]];
+  for (const n of notes) {
+    const p = beatPosition(beats, n.start);
+    const f = p - Math.floor(p);
+    simple += cost(f, SIMPLE);
+    compound += cost(f, COMPOUND);
+  }
+  const ternary = compound < simple * 0.85;
+  // temps par mesure : contraste des appuis selon la longueur de mesure
+  const evidence = downbeatEvidence(rhythm, beats);
+  const contrast = (n: number) => {
+    const score = new Array(n).fill(0);
+    for (let i = 0; i < evidence.length; i++) score[i % n] += evidence[i];
+    const max = Math.max(0, ...score);
+    const rest = (score.reduce((a, b) => a + b, 0) - max) / (n - 1);
+    return max > 0 ? (max - rest) / max : 0;
+  };
+  const c2 = contrast(2);
+  const c3 = contrast(3);
+  const c4 = contrast(4);
+  const three = c3 > 1.2 * Math.max(c2, c4) && c3 > 0.25;
+  if (ternary) return three ? { beats: 9, beatType: 8 } : { beats: 6, beatType: 8 };
+  if (three) return { beats: 3, beatType: 4 };
+  return c2 > 1.3 * c4 ? { beats: 2, beatType: 4 } : { beats: 4, beatType: 4 };
+}
+
+/**
+ * Tempo réellement joué dans chaque mesure (noires par minute, au dixième) : durée de la mesure
+ * entre ses temps suivis. Écrit sans indication visible, il fait jouer à Écouter le morceau comme
+ * l'interprète, sans dériver : chaque barre de mesure tombe au même instant que dans l'enregistrement.
+ */
+function playedTempos(beats: number[], measures: [number, number][], beatTicks: number, written: number[]): number[] {
+  const at = (ticks: number) => {
+    const k = ticks / beatTicks;
+    const i = Math.floor(k);
+    if (i + 1 >= beats.length) return NaN;
+    return beats[i] + (k - i) * (beats[i + 1] - beats[i]);
+  };
+  const out: number[] = [];
+  measures.forEach(([a, b], m) => {
+    const seconds = at(b) - at(a);
+    const qpm = (((b - a) / DIVISIONS) * 60) / seconds;
+    // valeur aberrante ou fin de l'enregistrement : tempo écrit (ou celui de la mesure d'avant)
+    const sane = Number.isFinite(qpm) && qpm > written[m] / 2.5 && qpm < written[m] * 2.5;
+    out.push(sane ? Math.round(qpm * 10) / 10 : (out[m - 1] ?? written[m]));
+  });
+  return out;
+}
+
 export function transcribe(heard: HeardNote[], options: TranscribeOptions): Transcription {
   const ins = INSTRUMENTS[options.instrument];
   const notes = cleanNotes(heard, options.instrument);
@@ -925,7 +1011,16 @@ export function transcribe(heard: HeardNote[], options: TranscribeOptions): Tran
   const { fifths, mode } = estimateKey(all.length ? all : notes);
   const tempo = Math.round(tempoOf(beats) * (beatTicks / DIVISIONS));
   // tempo de chaque mesure (noires par minute) : Écouter suit les sections du morceau
-  const tempos = measureTempos(beats, measures, beatTicks, tempo, options.tempo !== undefined);
+  const fixed = options.tempo !== undefined;
+  // indication de métronome : noire, ou noire pointée en 6/8, 9/8, 12/8 (le tempo joué reste en noires)
+  const metronome = (qpm: number) =>
+    compound
+      ? `<metronome><beat-unit>quarter</beat-unit><beat-unit-dot/><per-minute>${Math.round(qpm / 1.5)}</per-minute></metronome>`
+      : `<metronome><beat-unit>quarter</beat-unit><per-minute>${qpm}</per-minute></metronome>`;
+  const tempos = measureTempos(beats, measures, beatTicks, tempo, fixed);
+  // tempo réellement joué dans chaque mesure (invisible) : Écouter suit le jeu de l'interprète
+  // (rubato, accelerando, ralenti), barre de mesure par barre de mesure
+  const played = fixed ? tempos : playedTempos(beats, measures, beatTicks, tempos);
 
   const piano = options.instrument === "piano";
   const staves = piano
@@ -939,12 +1034,15 @@ export function transcribe(heard: HeardNote[], options: TranscribeOptions): Tran
       m === 0
         ? `<attributes><divisions>${DIVISIONS}</divisions><key><fifths>${fifths}</fifths><mode>${mode}</mode></key><time><beats>${options.beats}</beats><beat-type>${options.beatType}</beat-type></time>${
             piano ? `<staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef>` : `<clef><sign>G</sign><line>2</line></clef>`
-          }</attributes><direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempos[0]}</per-minute></metronome></direction-type><sound tempo="${tempos[0]}"/></direction>`
+          }</attributes><direction placement="above"><direction-type>${metronome(tempos[0])}</direction-type>${fixed ? `<sound tempo="${tempos[0]}"/>` : ""}</direction>`
         : "";
-    const change =
+    // indication visible à chaque nouvelle section ; le tempo joué (<sound>) passe avant
+    const shown =
       m > 0 && tempos[m] !== tempos[m - 1]
-        ? `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempos[m]}</per-minute></metronome></direction-type><sound tempo="${tempos[m]}"/></direction>`
+        ? `<direction placement="above"><direction-type>${metronome(tempos[m])}</direction-type>${fixed ? `<sound tempo="${tempos[m]}"/>` : ""}</direction>`
         : "";
+    const sound = !fixed && (m === 0 || played[m] !== played[m - 1]) ? `<sound tempo="${played[m]}"/>` : "";
+    const change = sound + shown;
     const content = change + (piano ? `${staves[0][m]}<backup><duration>${b - a}</duration></backup>${staves[1][m]}` : staves[0][m]);
     // levée : mesure incomplète, non comptée
     const number = offset > 0 ? m : m + 1;
