@@ -154,6 +154,34 @@
       "license": "À vérifier (déposé dans content/a-convertir)",
       "origin": "omr",
       "tags": []
+    },
+    {
+      "id": "borne-carmen-fantaisie-brillante-habanera-et-variations",
+      "title": "Fantaisie brillante sur Carmen — Habanera et variations",
+      "composer": "François Borne",
+      "complexity": 68,
+      "level": 5,
+      "key": "Sol majeur",
+      "time": "2/4",
+      "range": {
+        "low": "Ré4",
+        "high": "Si6"
+      },
+      "noteCount": 945,
+      "file": "borne-carmen-fantaisie-brillante-habanera-et-variations.musicxml",
+      "source": "IMSLP (éd. Choudens, A.C. 4918), relu sur la gravure",
+      "sourceUrl": "https://imslp.org/wiki/Fantaisie_brillante_sur_des_airs_de_Carmen_(Borne,_Fran%C3%A7ois)",
+      "license": "Public Domain",
+      "origin": "omr",
+      "tags": [
+        "romantique",
+        "opéra",
+        "flûte et piano"
+      ],
+      "accompanimentFile": "borne-carmen-fantaisie-brillante-habanera-et-variations.accomp.musicxml",
+      "partners": [
+        "piano"
+      ]
     }
   ]
 }
